@@ -314,3 +314,40 @@ legend('left',legend=unique(cl_cluster),
        border=0, cex=0.6)
 dev.off()
 ```
+
+
+### ME Enrichment by Subtype
+
+According to the plot above:
+
+A: enriched in ME1, ME3 (turquoise, brown)
+A2:ME5 and ME9 (green, magenta)
+N: ME1 and ME2, ME11 (H82) (turquoise, blue, greenyellow)
+P: ME8 (pink)
+Y: ME7 (black)
+
+### GO terms enriched in modules
+Let's look at what gene ontologies may be associated with each module. Must use EntrezID values when using the `WGCNA::GOenrichmentAnalysis` function. These can be found in a standard database at EBI. The file was downloaded from ftp://ftp.ebi.ac.uk/pub/databases/genenames/new/tsv/locus_types/gene_with_protein_product.txt and saved in `../data`. First, we will make a new function to obtain EntrezIDs from gene names in this file.
+```{r EntrezIDs}
+
+geneinfo <- read.csv('./data/gene_with_protein_product.txt',sep='\t',as.is=TRUE)
+getEntrezID <- function(genename) geneinfo[match(genename,geneinfo$symbol),'entrez_id']
+modules$entrez_id <- getEntrezID(modules$gene)
+
+```
+
+Next, let's try to identify GO terms enriched in each module. The original function in the `WGCNA` package is `GOenrichmentAnalysis`, which is still functional but considered deprecated. In addition to the all-encompassing GO group, there are groups corresponding to the GO ontologies Biological Process (BP), Cellular Component (CC) and Molecular Function (MF). 
+
+```{r GO term enrichment}
+GOenr <- GOenrichmentAnalysis(modules$module, modules$entrez_id, verbose=0)
+```
+
+Pull out the enriched terms and remove terms that do not pass a minimum P value (Bonferoni-corrected).
+```{r}
+mostenr <- GOenr$bestPTerms$BP$enrichment
+mostenr_sig <- mostenr[mostenr$rank==1 | mostenr$BonferoniP <0.05,]
+mostenr_sig[,c('module','rank','BonferoniP','termName')]
+write.csv(mostenr_sig[,c('module','rank','BonferoniP','termName')], file = file.path(wd, 'Most_enriched_MC.csv'))
+save(mostenr, file = file.path(wd,"Most_enriched_MC.Rdata"))
+
+```

@@ -1,19 +1,301 @@
 ---
 title: "hdWGCNA of Mesoderm Data"
-output: html_notebook
+output: 
+  html_notebook:
+    self_contained: yes
+    smart: no
+    toc: yes
+    toc_depth: 4
 ---
+This notebook is for running hdWGCNA (single-cell WGCNA) and follows the tutorial here: https://smorabit.github.io/hdWGCNA/articles/basic_tutorial.html. Because Stephen already preprocessed (normalized) the data, we can read in both the raw and normalized data into a Seurat object, as well as the UMAP calculated. We also read in the metadata to add cell population labels and the embryo labels to the seurat object.
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+# Setup
 
-Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
-
-```{r}
-plot(cars)
+```{r, setup, include=FALSE}
+knitr::opts_knit$set(root.dir ="/Users/smgroves/Documents/GitHub/mesoderm_booleabayes_project/")
 ```
 
-Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+```{r install, message = FALSE,warning = FALSE}
+# # install BiocManager
+# install.packages("BiocManager")
+# 
+# # install Bioconductor core packages
+# BiocManager::install()
+# 
+# # install additional packages:
+# install.packages(c("Seurat", "WGCNA", "igraph", "devtools"))
+# install.packages('harmony')
+# devtools::install_github('smorabit/hdWGCNA', ref='dev')
 
-When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+# single-cell analysis package
+library(Seurat)
 
-The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+# plotting and data science packages
+library(tidyverse)
+library(cowplot)
+library(patchwork)
+library(harmony)
+# co-expression network analysis packages:
+library(WGCNA)
+library(hdWGCNA)
+
+# using the cowplot theme for ggplot
+theme_set(theme_cowplot())
+
+# set random seed for reproducibility
+set.seed(12345)
+```
+
+## Read in data
+
+```{r read-data}
+raw_counts <- read.table(
+  file = './data/raw-counts-mesoderm-wildtype.csv',row.names = 1, header  = 1, sep = ','
+)
+normalized_data <- read.table(
+  file = './data/log1p-normalized-counts-mesoderm-wildtype.csv', row.names = 1, header = 1, sep = ','
+)
+seurat<-CreateSeuratObject(counts = raw_counts, min.cells = 3, min.genes = 350, project = "mesoderm")
+
+```
+
+## Load metadata and add to seurat object
+
+```{r preprocessing}
+seurat@assays$RNA@data <- as.matrix(normalized_data)
+
+meta <- read.table(
+  file = './data/metadata-mesoderm-wildtype.csv',
+  as.is = TRUE, 
+  sep = ',', 
+  header = 1,
+  row.names = 1
+)
+row.names(meta) <- make.names(row.names(meta))
+
+umap <- as.matrix(meta[c('umap.1','umap.2')])
+colnames(umap) <- paste0("UMAP_", 1:2)
+row.names(umap) <- make.names(row.names(meta))
+
+seurat[["UMAP"]] <- CreateDimReducObject(embeddings = umap, key = "UMAP_", assay = DefaultAssay(seurat))
+
+Idents(seurat) <- meta$cell.pop
+seurat[["cell.pop"]] <- Idents(object = seurat)
+
+Idents(seurat) <-meta$embryo
+seurat[["embryo"]] <- Idents(object = seurat)
+DimPlot(seurat, reduction = "UMAP", pt.size = 0.5, dims = c(1,2),group.by = 'embryo' )
+
+DimPlot(seurat, reduction = "UMAP", pt.size = 0.5, dims = c(1,2),group.by = 'cell.pop' )
+
+
+```
+## Prepare for hgWGCNA
+
+As per the tutorial, our seurat object needs to first run through the following Seurat steps:
+
+- Normalize the gene expression matrix NormalizeData.
+- Identify highly variable genes VariableFeatures.
+- Scale the normalized expression data ScaleData
+- Perform dimensionality reduction RunPCA and batch correction if needed RunHarmony.
+- Non-linear dimensionality reduction RunUMAP for visualizations.
+- Group cells into clusters (FindNeighbors and FindClusters).
+
+We already have the normalization and the UMAP. We perform the other steps below.
+
+```{r initial-setup-for-hgWGCNA}
+seurat <- FindVariableFeatures(seurat, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(seurat), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(seurat)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot2
+
+all.genes <- rownames(seurat)
+seurat <- ScaleData(seurat, features = all.genes)
+
+seurat <- RunPCA(seurat, features = VariableFeatures(object = seurat))
+seurat <- FindNeighbors(seurat, dims = 1:10)
+seurat <- FindClusters(seurat, resolution = 0.5)
+
+
+```
+## Setup WGCNA
+
+We define how hdWGCNA will be run, and the name of the experiment.
+
+```{r setup-for-wgcna}
+wgcna_name <- "run_1"
+seurat <- SetupForWGCNA(
+  seurat,
+  gene_select = "fraction", # the gene selection approach
+  fraction = 0.05, # fraction of cells that a gene needs to be expressed in order to be included
+  wgcna_name = wgcna_name # the name of the hdWGCNA experiment
+)
+```
+
+# Construct metacells
+After we have set up our Seurat object, the first step in running the hdWGCNA pipeine in hdWGCNA is to construct metacells from the single-cell dataset. Briefly, metacells are aggregates of small groups of similar cells originating from the same biological sample of origin. The k-Nearest Neighbors (KNN) algorithm is used to identify groups of similar cells to aggregate, and then the average or summed expression of these cells is computed, thus yielding a metacell gene expression matrix. 
+
+hdWGCNA includes a function `MetacellsByGroups` to construct metacell expression matrices given a single-cell dataset. This function constructs a new Seurat object for the metacell dataset which is stored internally in the hdWGCNA experiment. 
+
+The group.by parameter determines which groups metacells will be constructed in. **We only want to construct metacells from cells that came from the same biological sample of origin**, so it is critical to pass that information to hdWGCNA via the `group.by` parameter. Additionally, we usually construct metacells for each cell type separately. Thus, in this example, we are grouping by `embryo` and `cell.pop` to achieve the desired result.
+
+The number of cells to be aggregated k should be tuned based on the size of the input dataset, in general a lower number for k can be used for small datasets. In the tutorial, with 40,039 cells, they used k=25, and usually use values between 20 and 75. The amount of allowable overlap between metacells can be tuned using the max_shared argument. We will use `k=20` here.
+
+```{r construct-metacells}
+# construct metacells  in each group
+seurat <- MetacellsByGroups(
+  seurat_obj = seurat,
+  group.by = c("cell.pop", "embryo"), # specify the columns in seurat_obj@meta.data to group by
+  k = 20, # nearest-neighbors parameter
+  max_shared = 10, # maximum number of shared cells between two metacells
+  ident.group = 'cell.pop' # set the Idents of the metacell seurat object
+)
+
+# normalize metacell expression matrix:
+seurat <- NormalizeMetacells(seurat)
+```
+We will save the metacell object separately, and save the seurat object at this point.
+
+```{r save-metacell-object}
+metacell_obj <- GetMetacellObject(seurat_obj = seurat)
+saveRDS(metacell_obj, file='./data/hdWGCNA_object.rds')
+saveRDS(seurat, file='./data/seurat_mesoderm.rds')
+```
+
+hdWGCNA also has wrapper functions to analyze the metacell object within `seurat`. 
+
+```{r analyze-metacells}
+seurat <- NormalizeMetacells(seurat)
+seurat <- ScaleMetacells(seurat, features=VariableFeatures(seurat))
+seurat <- RunPCAMetacells(seurat, features=VariableFeatures(seurat))
+seurat <- RunHarmonyMetacells(seurat, group.by.vars='embryo')
+seurat <- RunUMAPMetacells(seurat, reduction='harmony', dims=1:15)
+
+
+p1 <- DimPlotMetacells(seurat, group.by='cell.pop') + umap_theme() + ggtitle("Cell Type")
+p2 <- DimPlotMetacells(seurat, group.by='embryo') + umap_theme() + ggtitle("Sample")
+
+p1 | p2
+```
+
+# Co-expression network analysis (WGCNA)
+
+This is where we get into the meat of WGCNA. Interestingly, the tutorial suggests running WGCNA on each cell type. This is unexpected, since normally we would expect gene modules to be able to differentiate different cell types (rather than only describing one of them). We will use the option to select multiple groups, and select all cell types. **Notably, the PGC cells were completely dropped out. We may try rerunning with smaller metacells if this is an issue.**
+
+```{r Set-data-expression}
+seurat <- SetDatExpr(
+  seurat,
+  group_name = levels(seurat@meta.data$cell.pop),
+  group.by='cell.pop'
+)
+```
+
+## Select soft-power threshold
+
+See `1-WGCNA-mesoderm-scRNAseq.Rmd` for more information on WGCNA steps.
+
+```{r test-soft-power}
+# Test different soft powers:
+seurat <- TestSoftPowers(
+  seurat,
+  setDatExpr = FALSE, # set this to FALSE since we did this above
+)
+
+# plot the results:
+plot_list <- PlotSoftPowers(seurat)
+
+# assemble with patchwork
+wrap_plots(plot_list, ncol=2)
+```
+
+```{r construct-network}
+softpower <- 12
+# construct co-expression network:
+seurat <- ConstructNetwork(
+  seurat, soft_power=softpower,
+  setDatExpr=FALSE,
+  tom_name = 'ALL_run_1', # name of the topological overlap matrix written to disk,
+)
+```
+
+## Module Eigengenes
+hdWGCNA includes a function `ModuleEigengenes` to compute module eigengenes in single cells. Additionally, we allow the user to apply Harmony batch correction to the MEs, yielding harmonized module eigengenes (hMEs). The following code performs the module eigengene computation harmonizing by the Sample of origin using the group.by.vars parameter.
+```{r}
+# need to run ScaleData first or else harmony throws an error:
+seurat <- ScaleData(seurat, features=VariableFeatures(seurat))
+
+# compute all MEs in the full single-cell dataset
+seurat <- ModuleEigengenes(
+ seurat,
+ group.by.vars="embryo"
+)
+
+# harmonized module eigengenes:
+hMEs <- GetMEs(seurat)
+
+# module eigengenes:
+MEs <- GetMEs(seurat, harmonized=FALSE)
+```
+
+## Module connectivity
+
+In co-expression network analysis, we often want to focus on the “hub genes”, those which are highly connected within each module. Therefore we wish to determine the eigengene-based connectivity, also known as kME, of each gene. hdWGCNA includes the ModuleConnectivity to compute the kME values in the full single-cell dataset, rather than the metacell dataset. This function essentially computes pairwise correlations between genes and module eigengenes. The tutorial recommends that kME be computed in the cell type or group that was previously used to run ConstructNetwork. Since we used all cell types, we will calculate kMEs without defining which cell type subset to use.
+```{r module-connectivity}
+# compute eigengene-based connectivity (kME):
+seurat <- ModuleConnectivity(
+  seurat)
+
+# plot genes ranked by kME for each module
+p <- PlotKMEs(seurat, ncol=5)
+
+p
+
+# get hub genes
+hub_df <- GetHubGenes(seurat, n_hubs = 10)
+
+head(hub_df)
+```
+
+```{r save}
+saveRDS(seurat, file='seurat_mesoderm.rds')
+
+```
+
+## Plotting module features
+
+```{r}
+# make a featureplot of hMEs for each module
+plot_list <- ModuleFeaturePlot(
+  seurat,
+  features='hMEs', # plot the hMEs
+  order=TRUE # order so the points with highest hMEs are on top
+)
+
+# stitch together with patchwork
+wrap_plots(plot_list, ncol=6)
+```
+
+```{r}
+seurat <- ModuleExprScore(
+  seurat,
+  n_genes = 25,
+  method='Seurat'
+)
+
+# make a featureplot of hub scores for each module
+plot_list <- ModuleFeaturePlot(
+  seurat,
+  features='scores', # plot the hub gene scores
+  order='shuffle', # order so cells are shuffled
+  seurat = TRUE # depending on Seurat vs UCell for gene scoring
+)
+
+# stitch together with patchwork
+wrap_plots(plot_list, ncol=6)
+```
 
