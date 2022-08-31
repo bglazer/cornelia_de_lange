@@ -1,0 +1,9 @@
+Below I describe the source of all external files including a brief description of their contents and a download link to retrieve them
+
+string_db_mouse_ppi.txt.gz - Protein-protein interactions from the STRING database v11.5. https://stringdb-static.org/download/protein.links.detailed.v11.5/10090.protein.links.detailed.v11.5.txt.gz
+tiana_etal_science_advances_2022.csv - Supplementary datafile S1, excel file sheet "Nanog E7.5 +dox vs -dox" (doi: 10.1126/sciadv.abo3583). Converted to csv
+trrust_rawdata.mouse.tsv - TRRUST transcription factors, version (16/04/2018), downloaded from https://www.grnpedia.org/trrust/data/trrust_rawdata.mouse.tsv 
+mus_musculus.json - Ensembl genome data for mouse (GRCm39), downloaded from http://ftp.ensembl.org/pub/current_json/mus_musculus/
+mouse_gene_names.tsv - Ensembl data from BioMART http://useast.ensembl.org/biomart/martview/4ea92bcb7b97396e7ec4db50d4e77ae0?VIRTUALSCHEMANAME=default&ATTRIBUTES=mmusculus_gene_ensembl.default.feature_page.ensembl_gene_id|mmusculus_gene_ensembl.default.feature_page.external_gene_name|mmusculus_gene_ensembl.default.feature_page.external_synonym|mmusculus_gene_ensembl.default.feature_page.ensembl_peptide_id|mmusculus_gene_ensembl.default.feature_page.ensembl_transcript_id&FILTERS=&VISIBLEPANEL=resultspanel
+log1p-normalized-counts-mesoderm-wildtype.csv - Data from Calof lab, https://www.dropbox.com/sh/l6rn9idy7yzag4m/AACbpDmaZTEi734VQ3XwDrRua?dl=0
+raw-counts-mesoderm-wildtype.csv - Data from Calof lab, https://www.dropbox.com/sh/l6rn9idy7yzag4m/AACbpDmaZTEi734VQ3XwDrRua?dl=0
