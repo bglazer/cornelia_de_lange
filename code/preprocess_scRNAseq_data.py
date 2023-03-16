@@ -1,9 +1,9 @@
 #%%
 from matplotlib import pyplot as plt
 import numpy as np
-from tqdm import tqdm
+
 #%%
-f = open('../data/raw-counts-mesoderm-wildtype.csv','r')
+f = open('../data/raw-counts-mes-wildtype.csv','r')
 
 #%%
 # Read the first line of the file
