@@ -5,13 +5,17 @@ import random
 import run
 import initialize
 import pickle
+from joblib import Parallel, delayed
 
+num_steps = int(5e4)
+num_processes = 100
+n_parallel = 100
 #num_steps = int(5e4)
-num_steps = int(10)
-num_processes = 1
 explorationPolicy = explorationDecay
-min_edges = 8
-max_edges = 30
+# Number of nodes in the graph
+min_edges = 119
+# Total number of edges in the graph
+max_edges = 248
 explorationConstant = tuple([random.uniform(.2,.5) for i in range(num_processes)])
 stop_prior = tuple([random.uniform(.6,.9) for i in range(num_processes)])
 rave_equiv_param = tuple([random.randint(1000,500000) for i in range(num_processes)])
@@ -19,7 +23,7 @@ rave_equiv_param = tuple([random.randint(1000,500000) for i in range(num_process
 keep_tree = True
 cache = False
 nested = True
-threshold = .99
+threshold = .95
 
 parameters = {
     'num_steps': num_steps,
@@ -44,7 +48,10 @@ output_dir = '../../output/mc_boomer'
 
 datafile = f'{data_dir}/tiana_etal_differential_expression.csv'
 graph = pickle.load(open(f'{data_dir}/filtered_graph.pickle','rb'))
-initial_actions = initialize.allActions(graph)
+
+#n_actions = random.randint(min_edges-50, min_edges+50)
+#model, actions = initialize.randomModel(actions, graph, n_actions)
+actions = initialize.allActions(graph)
 model = initialize.emptyModel(graph)
 experiments = initialize.experiments(datafile, graph)
 
@@ -54,7 +61,7 @@ def start(job):
     parameter_file.close()
 
     output_string = f'job-{job}_tmstp-{timestamp}'
-    run.search(initial_actions,
+    run.search(actions,
                model,
                experiments,
                stop_prior = stop_prior[job],
@@ -68,8 +75,8 @@ def start(job):
                cache = cache,
                nested = nested,
                threshold=threshold,
-               stats_file = f'{output_dir}/stats/search_stats-{output_string}.csv',
+               stats_file = None, #f'{output_dir}/stats/search_stats-{output_string}.csv',
                model_file = f'{output_dir}/models/models-{output_string}.txt.gz',
-               run_file = f'{output_dir}/logs/run_log-{output_string}.log'
-              )
+               run_file = f'{output_dir}/logs/run_log-{output_string}.log')
+
 start(0)

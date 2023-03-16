@@ -4,6 +4,8 @@ from mc_boomer.action import Action, Source
 from mc_boomer.boolean_model import BooleanModel
 # TODO if this works, make it part of mc_boomer module
 from experiment import Experiment
+import random
+from mc_boomer.search_state import SearchState
 
 def emptyModel(graph):
     # TODO make this part of BooleanModel init
@@ -11,6 +13,23 @@ def emptyModel(graph):
     for node in graph.nodes:
         rules[node] = ([],[])
     return BooleanModel(rules)
+
+def randomModel(actions, graph, n_actions):
+    # TODO add "remove/delete" actions to the action list
+    # TODO this would require modifying takeAction as well
+    model = emptyModel(graph)
+    state = SearchState(model, 
+                        None,
+                        # TODO how does stop prior interact with first step of search process?
+                        0.0,
+                        min_edges=0,
+                        max_edges=len(model.nodes),
+                        actions=actions)
+    for i in range(n_actions):
+        action,prior = random.choice(state.getPossibleActions())
+        state = state.takeAction(action)
+    return state.model, state.actions
+    
 
 def allActions(graph):
     actions = {}

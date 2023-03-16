@@ -4,32 +4,40 @@ import graph_tool as gt
 
 
 
+# def get_prop_type(value, key=None):
+#     """
+#     Performs typing and value conversion for the graph_tool PropertyMap class.
+#     If a key is provided, it also ensures the key is in a format that can be
+#     used with the PropertyMap. Returns a tuple, (type name, value, key)
+#     """
+
+#     # Deal with the value
+#     if isinstance(value, bool):
+#         tname = 'bool'
+
+#     elif isinstance(value, int):
+#         tname = 'float'
+#         value = float(value)
+
+#     elif isinstance(value, float):
+#         tname = 'float'
+
+#     elif isinstance(value, dict):
+#         tname = 'object'
+    
+#     elif value is None:
+#         tname = 'string'
+#         value = ''
+#     else:
+#         tname = 'string'
+#         value = str(value)
+
+#     return tname, value, key
+
 def get_prop_type(value, key=None):
-    """
-    Performs typing and value conversion for the graph_tool PropertyMap class.
-    If a key is provided, it also ensures the key is in a format that can be
-    used with the PropertyMap. Returns a tuple, (type name, value, key)
-    """
+    
 
-    # Deal with the value
-    if isinstance(value, bool):
-        tname = 'bool'
-
-    elif isinstance(value, int):
-        tname = 'float'
-        value = float(value)
-
-    elif isinstance(value, float):
-        tname = 'float'
-
-    elif isinstance(value, dict):
-        tname = 'object'
-
-    else:
-        tname = 'string'
-        value = str(value)
-
-    return tname, value, key
+    return 'string', '', ''
 
 
 def nx2gt(nxG):
@@ -72,22 +80,22 @@ def nx2gt(nxG):
     # in a special PropertyMap called 'id' -- modify as needed!
     gtG.vertex_properties['id'] = gtG.new_vertex_property('string')
 
-    # Add the edge properties second
-    eprops = set() # cache keys to only add properties once
-    for src, dst, data in nxG.edges(data=True):
+#     # Add the edge properties second
+#     eprops = set() # cache keys to only add properties once
+#     for src, dst, data in nxG.edges(data=True):
 
-        # Go through all the edge properties if not seen and add them.
-        for key, val in data.items():
-            if key in eprops: continue # Skip properties already added
+#         # Go through all the edge properties if not seen and add them.
+#         for key, val in data.items():
+#             if key in eprops: continue # Skip properties already added
 
-            # Convert the value and key into a type for graph-tool
-            tname, _, key = get_prop_type(val, key)
+#             # Convert the value and key into a type for graph-tool
+#             tname, _, key = get_prop_type(val, key)
 
-            prop = gtG.new_edge_property(tname) # Create the PropertyMap
-            gtG.edge_properties[key] = prop     # Set the PropertyMap
+#             prop = gtG.new_edge_property(tname) # Create the PropertyMap
+#             gtG.edge_properties[key] = prop     # Set the PropertyMap
 
-            # Add the key to the already seen properties
-            eprops.add(key)
+#             # Add the key to the already seen properties
+#             eprops.add(key)
 
     # Phase 2: Actually add all the nodes and vertices with their properties
     # Add the nodes
@@ -109,9 +117,9 @@ def nx2gt(nxG):
         # Look up the vertex structs from our vertices mapping and add edge.
         e = gtG.add_edge(vertices[src], vertices[dst])
 
-        # Add the edge properties
-        for key, value in data.items():
-            gtG.ep[key][e] = value # ep is short for edge_properties
+#         # Add the edge properties
+#         for key, value in data.items():
+#             gtG.ep[key][e] = value # ep is short for edge_properties
 
     # Done, finally!
     return gtG

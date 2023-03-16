@@ -5,3 +5,5 @@ output/signed/cor/TOMplot.pdf
 data/log1p-normalized-counts-mesoderm-wildtype.csv
 *.rda
 .ipynb_checkpoints
+output/mc_boomer/*
+*pyc
