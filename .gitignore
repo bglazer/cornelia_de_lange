@@ -7,3 +7,4 @@ data/log1p-normalized-counts-mesoderm-wildtype.csv
 .ipynb_checkpoints
 output/mc_boomer/*
 *pyc
+output/*out
