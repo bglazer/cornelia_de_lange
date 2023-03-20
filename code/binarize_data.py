@@ -3,7 +3,8 @@ from matplotlib import pyplot as plt
 import numpy as np
 
 #%%
-f = open('../data/raw-counts-mes-wildtype.csv','r')
+f = open('../data/raw-counts-mes-mutant.csv','r')
+genotype = 'mutant'
 
 #%%
 # Read the first line of the file
@@ -60,7 +61,7 @@ medians = np.median(expression, axis=1).astype(int).reshape(-1,1)
 binary_expression = (expression > medians)
 # Save the binary data
 import pickle
-pickle.dump(binary_expression, open('../data/binary_expression.pickle', 'wb'))
+pickle.dump(binary_expression, open(f'../data/{genotype}_binary_expression.pickle', 'wb'))
 
 #%%
 # Distribution of the proportion of genes that each cell expresses
@@ -96,13 +97,19 @@ for i,name in enumerate(names_in_data):
 
 # %%
 # UMAP embed only the genes that are in the Nanog regulatory network
-graph_embedding = umap.UMAP(metric='manhattan').fit_transform()
+graph_expression = expression[indices_of_nodes_in_graph,:]
+graph_embedding = umap.UMAP(metric='manhattan').fit_transform(graph_expression.T)
 # %%
 # Plot the UMAP embedding
 plt.scatter(graph_embedding[:,0], graph_embedding[:,1], s=1, alpha=0.1);
 
 #%%
-!mkdir ../figures/histograms_of_genes_in_graph/ -p
+# Make a directory if it doesn't exist to save the histograms
+import os
+try:
+    os.mkdir('../figures/histograms_of_genes_in_graph/')
+except FileExistsError:
+    pass
 
 #%%
 # Sort the data indices of the genes in the network by their expression
@@ -112,14 +119,14 @@ sorted_data_indices = np.array(indices_of_nodes_in_graph)[sorted_expression_idxs
 
 #%%
 # Plot the histograms of the expression of the genes in the Nanog regulatory network
-for i,data_idx in enumerate(sorted_data_indices[::-1][:10]):
+for i,data_idx in enumerate(sorted_data_indices[::-1]):
     if i%10==0:
-        print(i)
+        print(f'{i/len(sorted_data_indices):.2f}')
     plt.hist(expression[data_idx,:], bins=100)
     # Vertical red line on at the median
     plt.axvline(np.median(expression[data_idx,:]), color='red', linewidth=2)
     plt.title(names_in_data[data_idx])
-    plt.savefig(f'../figures/histograms_of_genes_in_graph/{i}_{names_in_data[data_idx]}.png')
+    plt.savefig(f'../figures/histograms_of_genes_in_graph/{genotype}_{i}_{names_in_data[data_idx]}.png')
     # Clear the plot so we can plot the next histogram
     plt.clf();
 
