@@ -1,0 +1,3 @@
+To make the installation of torchdyn work, I had to do: 
+
+export LD_LIBRARY_PATH=/home/bglaze/miniconda3/envs/cornelia_de_lange/lib/
