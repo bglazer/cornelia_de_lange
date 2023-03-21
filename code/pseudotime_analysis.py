@@ -2,6 +2,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import scanpy as sc
+import sklearn
+import umap
 
 #%%
 # Set the random seed for reproducibility
@@ -92,9 +94,23 @@ for i,name in enumerate(names_in_data):
 network_data = adata[:,indices_of_nodes_in_graph]
 network_data.var_names = [names_in_data[i] for i in indices_of_nodes_in_graph]
 # Rerun PCA and UMAP on the filtered data
-sc.tl.pca(network_data, svd_solver='arpack')
-sc.pp.neighbors(network_data, n_neighbors=15, n_pcs=30)
-sc.tl.umap(network_data)
+pca = sklearn.decomposition.PCA(n_components=30)
+network_data.obsm['X_pca'] = pca.fit_transform(network_data.X)
+# Run UMAP on the PCA embedding
+umap_ = umap.UMAP(n_components=2)
+umap_embedding = umap_.fit_transform(network_data.obsm['X_pca'])
+network_data.obsm['X_umap'] = umap_embedding
+ #%%
+# Plot the UMAP embedding of the filtered data
+sc.pl.umap(network_data, size=10, show=False)
+
+#%%
+# Save the umap object
+pickle.dump(umap_, open(f'../data/umap_{genotype}.pickle', 'wb'))
+# Save the embedding
+pickle.dump(umap_embedding, open(f'../data/umap_embedding_{genotype}.pickle', 'wb'))
+# Save the pca object
+pickle.dump(pca, open(f'../data/pca_{genotype}.pickle', 'wb'))
 
 #%%
 # Plot the overall distribution of total gene expression
@@ -120,9 +136,6 @@ plt.hist(network_data.X.sum(axis=1), bins=100, cumulative=True);
 plt.title('Cumulative distribution of total gene expression per cell');
 plt.savefig(f'../figures/network_genes_cumulative_expression_per_cell_{genotype}.png', dpi=300)
 
- #%%
-# Plot the UMAP embedding of the filtered data
-sc.pl.umap(network_data, size=10, show=False)
 
 #%%
 # Import the cluster assigments of each gene from the Tiana et al paper
@@ -213,7 +226,9 @@ initial_points = np.where(cluster_sums[:,0] > top_percentile)[0]
 #%%
 import pyVIA.core as via
 pseudotime = via.VIA(network_data.X, random_seed=42, root_user=initial_points)
-pseudotime.run_VIA() 
+pseudotime.run_VIA()
+# Dump the VIA object to a pickle file
+pickle.dump(pseudotime, open(f'../data/{genotype}_pseudotime.pickle', 'wb'))
 
 # %%
 f, ax = via.plot_scatter(embedding = network_data.obsm['X_umap'], 
