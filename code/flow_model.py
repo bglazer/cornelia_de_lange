@@ -24,15 +24,15 @@ class FlowModel(torch.nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, num_layers):
         super(FlowModel, self).__init__()
         self.model = MLP(input_dim, output_dim, hidden_dim, num_layers)
-        self.neural_ode = NeuralODE(self.model, sensitivity='adjoint')  
+        # self.neural_ode = NeuralODE(self.model, sensitivity='adjoint')  
 
     def forward(self, state, tspan):
         # state is a tensor of shape (num_nodes, num_states)
-        delta = self.neural_ode(state, tspan)
+        delta = self.model(state)
         return delta
 
-    def trajectory(self, state, tspan):
-        # state is a tensor of shape (num_nodes, num_states)
-        # tspan is a tensor of shape (num_timesteps,)
-        trajectory = self.neural_ode.trajectory(state, tspan)
-        return trajectory
+    # def trajectory(self, state, tspan):
+    #     # state is a tensor of shape (num_nodes, num_states)
+    #     # tspan is a tensor of shape (num_timesteps,)
+    #     trajectory = self.neural_ode.trajectory(state, tspan)
+    #     return trajectory

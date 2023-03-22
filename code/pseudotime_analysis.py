@@ -225,7 +225,13 @@ initial_points = np.where(cluster_sums[:,0] > top_percentile)[0]
 
 #%%
 import pyVIA.core as via
-pseudotime = via.VIA(network_data.X, random_seed=42, root_user=initial_points)
+pseudotime = via.VIA(network_data.X, 
+                     knn=30,
+                     cluster_graph_pruning_std=0.5,
+                     jac_std_global=.15,
+                     too_big_factor=.2,
+                     root_user=initial_points,
+                     random_seed=42)
 pseudotime.run_VIA()
 # Dump the VIA object to a pickle file
 pickle.dump(pseudotime, open(f'../data/{genotype}_pseudotime.pickle', 'wb'))
@@ -255,5 +261,4 @@ fig, ax=via.plot_edge_bundle(hammerbundle_dict=hammerbundle_milestone_dict,
                      extra_title_text='externally computed edgebundle', headwidth_bundle=0.4)
 plt.savefig(f'../figures/pseudotime/{genotype}_pseudotime_edgebundle.png', dpi=300)
 # fig.set_size_inches(15,15)
-
 # %%
