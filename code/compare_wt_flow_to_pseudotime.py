@@ -33,24 +33,43 @@ def embed(X):
     return pca_.transform(X)[:,1:3]
 
 V = velocity_vectors(T, via.data)
-# Set rows with any nan to all zero
-V[np.isnan(V).sum(axis=1) > 0] = 0
 
 embedding = embed(via.data)
 V_emb = embed_velocity(via.data, V, embed)
 
 idxs = np.arange(0, via.data.shape[0])
-dpv = embed_velocity(X=X,
+dpV = embed_velocity(X=X,
                     velocity=tonp(pV),
                     embed_fn=embed)
+
+
+#%%
+def cosine_similarity(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+# Calculate the cosine similarity between the true and predicted vectors
+similarities = np.zeros(len(idxs))
+pVnp = tonp(pV)
+for i in range(len(idxs)):
+    similarities[i] = cosine_similarity(V[i], pVnp[i])
+similarities[np.isnan(similarities)] = 0
+# Normalize the similarities to be between 0 and 1
+min = -1
+max = 1
+similarities = (similarities - min) / (max - min)
+# Invert the similarities so that the most dissimilar vectors have the highest alpha
+alphas = 1-similarities
+
+# %%
 
 plot_arrows(idxs=idxs,
             points=embedding, 
             V=V_emb*10,
-            pV=dpv*10,
+            pV=dpV*10,
             sample_every=5,
             scatter=False,
             save_file=f'../figures/embedding/predicted_vs_pseudotime_mutant_vector_field.png',
             c=via.single_cell_pt_markov,
+            alphas=similarities,
             s=.5)
 # %%
