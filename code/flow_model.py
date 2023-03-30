@@ -21,7 +21,7 @@ def MLP(input_dim, output_dim, hidden_dim, num_layers):
     return Sequential(*layers)
 
 # FlowModel is a neural ODE that takes in a state and outputs a delta
-class FlowModel(torch.nn.Module):
+class ConnectedFlowModel(torch.nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, num_layers):
         super(FlowModel, self).__init__()
         self.model = MLP(input_dim, output_dim, hidden_dim, num_layers)
@@ -39,7 +39,7 @@ class FlowModel(torch.nn.Module):
     #     return trajectory
 
 # FlowModel is a neural ODE that takes in a state and outputs a delta
-class FlowModel(torch.nn.Module):
+class GraphFlowModel(torch.nn.Module):
     def __init__(self, num_layers, graph, data_idxs):
         super(FlowModel, self).__init__()
         # Make an MLP for each node in the networkx graph
