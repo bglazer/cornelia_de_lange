@@ -13,8 +13,8 @@ from random import seed
 seed(42)
 
 #%%
-f = open('../data/raw-counts-mes-mutant.csv','r')
-genotype = 'mutant'
+genotype = 'wildtype'
+f = open(f'../data/raw-counts-mes-{genotype}.csv','r')
 
 #%%
 # Read the first line of the file
@@ -86,6 +86,8 @@ for i,name in enumerate(names_in_data):
         for id in protein_name_to_ids[name]:
             if id in graph.nodes:
                 indices_of_nodes_in_graph.append(i)
+                if id in data_ids:
+                    print('Duplicate id', id, name, data_ids[id])
                 data_ids[id] = name
                 id_row[id] = i
 
@@ -93,6 +95,8 @@ for i,name in enumerate(names_in_data):
 # Filter the data to only include the genes in the Nanog regulatory network
 network_data = adata[:,indices_of_nodes_in_graph]
 network_data.var_names = [names_in_data[i] for i in indices_of_nodes_in_graph]
+
+#%%
 # Rerun PCA and UMAP on the filtered data
 pca = sklearn.decomposition.PCA(n_components=30)
 network_data.obsm['X_pca'] = pca.fit_transform(network_data.X)
@@ -105,6 +109,8 @@ network_data.obsm['X_umap'] = umap_embedding
 sc.pl.umap(network_data, size=10, show=False)
 
 #%%
+# Save the network data
+pickle.dump(network_data, open(f'../data/network_data_{genotype}.pickle', 'wb'))
 # Save the umap object
 pickle.dump(umap_, open(f'../data/umap_{genotype}.pickle', 'wb'))
 # Save the embedding
