@@ -8,11 +8,14 @@ from torchdyn.core import NeuralODE
 # output_dim: dimension of output
 # hidden_dim: dimension of hidden layers
 # num_layers: number of hidden layers
-def MLP(input_dim, output_dim, hidden_dim, num_layers):
+def MLP(input_dim, output_dim, hidden_dim, num_layers, input_bias=True):
     layers = []
-    layers.append(Linear(input_dim, hidden_dim))
+    # First layer has same number of inputs and outputs for interpretability of the input weights
+    layers.append(Linear(input_dim, input_dim, bias=input_bias))
     layers.append(LeakyReLU())
-    for i in range(num_layers - 1):
+    layers.append(Linear(input_dim, hidden_dim, bias=input_bias))
+    layers.append(LeakyReLU())
+    for i in range(num_layers - 2):
         layers.append(Linear(hidden_dim, hidden_dim))
         layers.append(LeakyReLU())
         # TODO do we need batch norm here?
@@ -23,25 +26,32 @@ def MLP(input_dim, output_dim, hidden_dim, num_layers):
 # FlowModel is a neural ODE that takes in a state and outputs a delta
 class ConnectedFlowModel(torch.nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, num_layers):
-        super(FlowModel, self).__init__()
+        super(ConnectedFlowModel, self).__init__()
         self.model = MLP(input_dim, output_dim, hidden_dim, num_layers)
         # self.neural_ode = NeuralODE(self.model, sensitivity='adjoint')  
 
-    def forward(self, state, tspan):
+    def forward(self, state):
         # state is a tensor of shape (num_nodes, num_states)
         delta = self.model(state)
         return delta
+    
+# FlowModel is a neural ODE that takes in a state and outputs a delta
+class L1FlowModel(torch.nn.Module):
+    def __init__(self, input_dim, output_dim, hidden_dim, num_layers):
+        super(L1FlowModel, self).__init__()
+        self.model = MLP(input_dim, output_dim, hidden_dim, num_layers, input_bias=False)
 
-    # def trajectory(self, state, tspan):
-    #     # state is a tensor of shape (num_nodes, num_states)
-    #     # tspan is a tensor of shape (num_timesteps,)
-    #     trajectory = self.neural_ode.trajectory(state, tspan)
-    #     return trajectory
-
+    def forward(self, state):
+        # state is a tensor of shape (num_nodes, num_states)
+        delta = self.model(state)
+        # Get the weights of the first layer
+        input_weights = self.model[0].weight
+        return delta, input_weights
+    
 # FlowModel is a neural ODE that takes in a state and outputs a delta
 class GraphFlowModel(torch.nn.Module):
     def __init__(self, num_layers, graph, data_idxs):
-        super(FlowModel, self).__init__()
+        super(GraphFlowModel, self).__init__()
         # Make an MLP for each node in the networkx graph
         # with one input to the MLP for each incoming edge and a 
         self.graph = graph
@@ -107,10 +117,4 @@ class GraphFlowModel(torch.nn.Module):
             output[:,self.data_idxs[node]] = delta[:,0]
 
         return output
-
-    # def trajectory(self, state, tspan):
-    #     # state is a tensor of shape (num_nodes, num_states)
-    #     # tspan is a tensor of shape (num_timesteps,)
-    #     trajectory = self.neural_ode.trajectory(state, tspan)
-    #     return trajectory
 

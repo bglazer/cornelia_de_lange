@@ -4,8 +4,9 @@ from matplotlib import pyplot as plt
 import pickle
 import numpy as np
 from pyVIA.core import l2_norm
-from flow_model import FlowModel
+from flow_model import L1FlowModel
 from util import tonp, plot_arrows, velocity_vectors, embed_velocity
+from sklearn.cluster import AgglomerativeClustering
 
 #%%
 genotype='wildtype'
@@ -21,48 +22,17 @@ via = pickle.load(open(f'../data/{genotype}_pseudotime.pickle', 'rb'))
 umap_ = pickle.load(open(f'../data/umap_{genotype}.pickle', 'rb'))
 # Load the pca object
 pca_ = pickle.load(open(f'../data/pca_{genotype}.pickle', 'rb'))
-# Load the graph object
-graph = pickle.load(open(f'../data/filtered_graph.pickle', 'rb'))
 
 #%%
 # Get the transition matrix from the VIA graph
 X = via.data
 T = via.sc_transition_matrix(smooth_transition=1)
+
 V = velocity_vectors(T, X)
 
 # bad hack that I have to do because VIA doesn't like working with low dimensional data
 # Setting nan values to zero. Nan values occur when a point has no neighbors
 V[np.isnan(V).sum(axis=1) > 0] = 0
-
-#%%
-def tonp(x):
-    return x.detach().cpu().numpy()
-
-#%%
-def plot_arrows(idxs, points, V, pV=None, sample_every=10, scatter=True, save_file=None, c=None, s=3, aw=0.001, xlimits=None, ylimits=None):
-    # Plot the vectors from the sampled points to the transition points
-    plt.figure(figsize=(15,15))
-    if scatter:
-        plt.scatter(points[:,0], points[:,1], s=s, c=c)
-    plt.xlim=xlimits
-    plt.ylim=ylimits
-    # black = true vectors
-    # Green = predicted vectors
-    sample = points[idxs]
-    
-    for i in range(0, len(idxs), sample_every):
-        plt.arrow(sample[i,0], sample[i,1], V[i,0], V[i,1], color='black', alpha=1, width=aw)
-        if pV is not None:
-            plt.arrow(sample[i,0], sample[i,1], pV[i,0], pV[i,1], color='g', alpha=1, width=aw)
-
-    # Remove the ticks and tick labels
-    plt.xticks([])
-    plt.yticks([])
-    plt.xlabel('PCA 1')
-    plt.ylabel('PCA 2')
-
-    if save_file is not None:
-        plt.savefig(save_file)
 
 #%%
 def embed(X):
@@ -93,33 +63,15 @@ y_limits = (y_min-y_buffer, y_max+y_buffer)
 #             ylimits=y_limits)
 
 #%%
+num_nodes = via.data.shape[1]
+hidden_dim = num_nodes*2
 num_layers = 3
 
-#%%
-network_data = pickle.load(open(f'../data/network_data_{genotype}.pickle', 'rb'))
-protein_id_to_name = pickle.load(open('../data/protein_id_to_name.pickle', 'rb'))
-protein_name_to_ids = pickle.load(open('../data/protein_names.pickle', 'rb'))
-
-nodes = list(network_data.var_names)
-indices_of_nodes_in_graph = []
-node_idxs = {}
-# Get the indexes of the data rows that correspond to nodes in the Nanog regulatory network
-for i,name in enumerate(nodes):
-    name = name.upper()
-    # Find the ensembl id of the gene
-    if name in protein_name_to_ids:
-        # There may be multiple ensembl ids for a gene name
-        for id in protein_name_to_ids[name]:
-            # If the ensembl id is in the graph, then the gene is in the network
-            if id in graph.nodes:
-                # Record the data index of the gene in the network data
-                node_idxs[id] = i
-
-#%%
 device = 'cuda:0'
-model = FlowModel(num_layers=num_layers, 
-                  graph=graph, 
-                  data_idxs=node_idxs).to(device)
+model = L1FlowModel(input_dim=num_nodes, 
+                    output_dim=num_nodes, 
+                    hidden_dim=hidden_dim, 
+                    num_layers=num_layers).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 loss_fn = torch.nn.MSELoss(reduction='mean')
 
@@ -133,8 +85,7 @@ n_points = 1000
 n_traces = 50
 n_samples = 10
 
-losses = {node : [] for node in graph.nodes}
-total_losses = []
+lmbda = 10
 
 #%%
 for i in range(n_epoch+1):
@@ -147,47 +98,35 @@ for i in range(n_epoch+1):
     # Data is small enough that we can take the full set
     # idxs = torch.arange(data.shape[0])
     starts = data[idxs]
-    pV = model(starts)
+    # TODO do we need to change the tspan?
+    # tspan is a single step from zero to one
+    pV, input_weights = model(starts)
     velocity = Vgpu[idxs]
-    # Calculate the loss for each node in the network
-    for node in graph.nodes:
-        # Get the index of the node in the network data
-        node_idx = node_idxs[node]
-        # Get the predicted velocity for the node
-        node_pV = pV[:,node_idx]
-        # Get the true velocity vector for the node
-        node_V = velocity[:,node_idx]
-        # Compute the loss between the predicted and true velocity vectors
-        node_loss = mse(node_pV, node_V)
-        # Add the loss to the total loss
-        losses[node].append(node_loss.item())
-    
     # Compute the loss between the predicted and true velocity vectors
     loss = mse(pV, velocity)
-    loss.backward()
+    # Compute the L1 penalty on the input weights
+    l1_penalty = torch.sum(torch.abs(input_weights))
+    # Add the loss and the penalty
+    total_loss = loss + lmbda*l1_penalty
+    total_loss.backward()
     optimizer.step()
-    print(i,' '.join([f'{x.item():.9f}' for x in [loss]]), flush=True)
-    total_losses.append(loss.item())
-
-    if i%100 == 0:
-        plt.plot(total_losses)
-        plt.savefig(f'../figures/loss_curve/loss_{genotype}.png')
+    print(i,' '.join([f'{x.item():.9f}' for x in [loss, l1_penalty]]), flush=True)
 
     # Every N steps plot the predicted and true vectors
-    if i % 200 == 0:
+    if i % 500 == 0 and False:
         idxs = torch.arange(data.shape[0])
         starts = data[idxs]
-        pV = model(starts)
+        pV, _ = model(starts)
         dpv = embed_velocity(X=tonp(starts),
-                             velocity=tonp(pV),
-                             embed_fn=embed)
+                            velocity=tonp(pV),
+                            embed_fn=embed)
         plot_arrows(idxs=idxs,
                     points=embedding, 
                     V=V_emb*10,
                     pV=dpv*10,
                     sample_every=5,
                     scatter=False,
-                    save_file=f'../figures/embedding/vector_field_{genotype}_{i}.png',
+                    save_file=f'../figures/embedding/connected_vector_field_{genotype}_{i}.png',
                     c=via.single_cell_pt_markov,
                     s=.5,
                     xlimits=x_limits,
@@ -204,5 +143,4 @@ for i in range(n_epoch+1):
 from datetime import datetime
 now = datetime.now()
 timestamp = now.strftime("%Y%m%d_%H%M%S")
-torch.save(model.state_dict(), f'../models/flow_model_{genotype}_{timestamp}.torch')
-# %%
+torch.save(model.state_dict(), f'../models/l1_flow_model_{genotype}_{timestamp}.torch')
