@@ -1,3 +1,4 @@
+models/*
 figures/*
 data/*
 data/metadata-mesoderm-wildtype.csv
