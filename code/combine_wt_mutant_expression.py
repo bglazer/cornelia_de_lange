@@ -204,12 +204,13 @@ for i in range(cluster_sums.shape[1]):
             ax.grid(False)
 
         plt.subplots_adjust(bottom=.4, left=.05)
-        # Add the terms to the plot as text below the plot
-        plt.text(0,-.1, '\n'.join(legend), wrap=True, fontsize=12,
-                verticalalignment='top', horizontalalignment='left',
-                transform=plt.gca().transAxes)
+        # Add the terms to the plot as text in the middle of the figure below the axes
+        plt.figtext(.05, .35, '\n'.join(legend), 
+                    horizontalalignment='left',
+                    verticalalignment='top',
+                    fontsize=12, wrap=True)
         # Save the plot
         plt.savefig(f'../figures/gene_cluster_heatmaps/cluster_{i}_expression.png', dpi=300)
         # Clear the plot
-        plt.clf()
+        plt.clf();
 # %%
