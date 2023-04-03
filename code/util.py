@@ -1,4 +1,5 @@
 import numpy as np
+from matplotlib import pyplot as plt
 
 def tonp(x):
     return x.detach().cpu().numpy()
@@ -65,3 +66,29 @@ def embed_velocity(X, velocity, embed_fn):
     dX_embed = X_embedding - V_emb
 
     return dX_embed
+
+def plot_qc_distributions(adata, genotype, name, figdir):
+    # Plot the overall distribution of total gene expression
+    plt.hist(adata.X.sum(axis=1), bins=100)
+    plt.title('Distribution of total gene expression per cell across all genes');
+    plt.savefig(f'{figdir}/{name}_total_expression_per_cell_{genotype}.png', dpi=300)
+    plt.close()
+
+    # Plot the distribution of gene expression for each gene
+    plt.hist(np.log10(adata.X.sum(axis=0)+1), bins=100)
+    plt.title('Log Distribution of total expression per gene across all cells');
+    plt.savefig(f'{figdir}/{name}_log_expression_per_gene_{genotype}.png', dpi=300)
+    plt.close()
+
+    # Plot the number of genes with expression > 0 per cell
+    plt.hist((adata.X>0).sum(axis=0), bins=100);
+    plt.title('Distribution of number of cells with expression > 0 per gene');
+    plt.savefig(f'{figdir}/{name}_nonzero_expression_per_gene_{genotype}.png', dpi=300)
+    plt.close()
+
+    # Plot the cumulative distribution of total gene expression per cell
+    plt.hist(adata.X.sum(axis=1), bins=100, cumulative=True);
+    plt.title('Cumulative distribution of total gene expression per cell');
+    plt.savefig(f'{figdir}/{name}_cumulative_expression_per_cell_{genotype}.png', dpi=300)
+    plt.close()
+

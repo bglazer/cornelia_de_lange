@@ -93,13 +93,7 @@ for i in range(n_epoch+1):
     # Run the model from N randomly selected data points
     # Random sampling
     idxs = torch.randint(0, data.shape[0], (n_points,))
-    
-    # TODO Note we're sampling all the points here, but we should be sampling a subset
-    # Data is small enough that we can take the full set
-    # idxs = torch.arange(data.shape[0])
     starts = data[idxs]
-    # TODO do we need to change the tspan?
-    # tspan is a single step from zero to one
     pV, input_weights = model(starts)
     velocity = Vgpu[idxs]
     # Compute the loss between the predicted and true velocity vectors

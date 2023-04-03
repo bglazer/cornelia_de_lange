@@ -4,6 +4,8 @@ import numpy as np
 import scanpy as sc
 import sklearn
 import umap
+from util import plot_qc_distributions
+import pyVIA.core as via
 
 #%%
 # Set the random seed for reproducibility
@@ -13,63 +15,42 @@ from random import seed
 seed(42)
 
 #%%
-genotype = 'wildtype'
-f = open(f'../data/raw-counts-mes-{genotype}.csv','r')
+genotype = 'mutant'
+adata = sc.read_h5ad(f'../data/{genotype}.h5ad')
 
 #%%
-# Read the first line of the file
-header = f.readline()
+sc.pl.highest_expr_genes(adata, n_top=20)
 
-# %%
-expression = []
-names_in_data = []
-for line in f:
-    # Split line by commas
-    sp = line.split(',')
-    gene = sp[0]
-    exp = [int(x) for x in sp[1:]]
-    expression.append(exp)
-    names_in_data.append(gene.strip('"'))
+#%% Filter out genes that are not expressed in at least 3 cells
+sc.pp.filter_genes(adata, min_cells=3)
 
-#%%
-expression = np.array(expression)
+#%% Filter out cells that have less than 200 genes expressed
+sc.pp.filter_cells(adata, min_genes=200)
 
-
-#%%
-adata = sc.AnnData(expression.T)
-adata.var_names = names_in_data
-# adata.obsm['X'] = expression
-#%%
-# Plot the overall distribution of total gene expression
-plt.hist(adata.X.sum(axis=1), bins=100)
-plt.title('Distribution of total gene expression per cell across all genes');
-plt.savefig(f'../figures/all_genes_total_expression_per_cell_{genotype}.png', dpi=300)
-
-#%%
-# Plot the distribution of gene expression for each gene
-plt.hist(np.log10(adata.X.sum(axis=0)+1), bins=100)
-plt.title('Log Distribution of total expression per gene across all cells');
-plt.savefig(f'../figures/all_genes_log_expression_per_gene_{genotype}.png', dpi=300)
-
-#%%
-# Plot the number of genes with expression > 0 per cell
-plt.hist((adata.X>0).sum(axis=0), bins=100);
-plt.title('Distribution of number of cells with expression > 0 per gene');
-plt.savefig(f'../figures/all_genes_nonzero_expression_per_gene_{genotype}.png', dpi=300)
+#%% Plot the percentage of mitochondrial genes expressed per cell
+adata.var['mt'] = adata.var_names.str.startswith('MT-')  # annotate the group of mitochondrial genes as 'mt'
+sc.pp.calculate_qc_metrics(adata, qc_vars=['mt'], percent_top=None, log1p=False, inplace=True)
+sc.pl.violin(adata, ['n_genes_by_counts', 'total_counts', 'pct_counts_mt'],
+             jitter=0.4, multi_panel=True)
 
 #%% 
-# Plot the cumulative distribution of total gene expression per cell
-plt.hist(adata.X.sum(axis=1), bins=100, cumulative=True);
-plt.title('Cumulative distribution of total gene expression per cell');
-plt.savefig(f'../figures/all_genes_cumulative_expression_per_cell_{genotype}.png', dpi=300)
+sc.pl.scatter(adata, x='total_counts', y='pct_counts_mt')
+sc.pl.scatter(adata, x='total_counts', y='n_genes_by_counts')
 
 #%%
-# use UMAP or PHate to obtain embedding that is used for single-cell level visualization
-# sc.tl.pca(adata, svd_solver='arpack')
-# sc.pp.neighbors(adata, n_neighbors=15, n_pcs=30)
-# sc.tl.umap(adata)
-# Plot the UMAP embedding
-# sc.pl.umap(adata, size=10, show=False)
+plot_qc_distributions(adata, genotype, 'all_genes', '../figures')
+
+#%%
+sc.pp.normalize_total(adata, target_sum=1e4)
+sc.pp.log1p(adata)
+# The regress_out and scale operations gave me results that were difficult to interpret
+# (i.e. negative values for the gene expression). They're not universally 
+# recommended for pseudotime analysis, so I'm skipping them for now
+# sc.pp.regress_out(adata, ['total_counts', 'pct_counts_mt'])
+# sc.pp.scale(adata, max_value=10)
+
+#%% Save the processed data
+adata.write(f'../data/{genotype}_processed.h5ad')
 
 #%%
 import pickle
@@ -80,7 +61,7 @@ protein_name_to_ids = pickle.load(open('../data/protein_names.pickle', 'rb'))
 indices_of_nodes_in_graph = []
 data_ids = {}
 id_row = {}
-for i,name in enumerate(names_in_data):
+for i,name in enumerate(adata.var_names):
     name = name.upper()
     if name in protein_name_to_ids:
         for id in protein_name_to_ids[name]:
@@ -94,14 +75,14 @@ for i,name in enumerate(names_in_data):
 #%%
 # Filter the data to only include the genes in the Nanog regulatory network
 network_data = adata[:,indices_of_nodes_in_graph]
-network_data.var_names = [names_in_data[i] for i in indices_of_nodes_in_graph]
+network_data.var_names = [adata.var_names[i] for i in indices_of_nodes_in_graph]
 
 #%%
 # Rerun PCA and UMAP on the filtered data
 pca = sklearn.decomposition.PCA(n_components=30)
 network_data.obsm['X_pca'] = pca.fit_transform(network_data.X)
 # Run UMAP on the PCA embedding
-umap_ = umap.UMAP(n_components=2)
+umap_ = umap.UMAP(n_components=2, random_state=42)
 umap_embedding = umap_.fit_transform(network_data.obsm['X_pca'])
 network_data.obsm['X_umap'] = umap_embedding
  #%%
@@ -119,108 +100,7 @@ pickle.dump(umap_embedding, open(f'../data/umap_embedding_{genotype}.pickle', 'w
 pickle.dump(pca, open(f'../data/pca_{genotype}.pickle', 'wb'))
 
 #%%
-# Plot the overall distribution of total gene expression
-plt.hist(network_data.X.sum(axis=1), bins=100)
-plt.title('Distribution of total gene expression per cell across all genes');
-plt.savefig(f'../figures/network_genes_total_expression_per_cell_{genotype}.png', dpi=300)
-
-#%%
-# Plot the distribution of gene expression for each gene
-plt.hist(np.log10(network_data.X.sum(axis=0)+1), bins=100)
-plt.title('Log Distribution of total expression per gene across all cells');
-plt.savefig(f'../figures/network_genes_log_expression_per_gene_{genotype}.png', dpi=300)
-
-#%%
-# Plot the number of genes with expression > 0 per cell
-plt.hist((network_data.X>0).sum(axis=0), bins=100);
-plt.title('Distribution of number of cells with expression > 0 per gene');
-plt.savefig(f'../figures/network_genes_nonzero_expression_per_gene_{genotype}.png', dpi=300)
-
-#%% 
-# Plot the cumulative distribution of total gene expression per cell
-plt.hist(network_data.X.sum(axis=1), bins=100, cumulative=True);
-plt.title('Cumulative distribution of total gene expression per cell');
-plt.savefig(f'../figures/network_genes_cumulative_expression_per_cell_{genotype}.png', dpi=300)
-
-
-#%%
-# Import the cluster assigments of each gene from the Tiana et al paper
-cluster_assignments = pickle.load(open('../data/louvain_clusters.pickle', 'rb'))
-# Convert the cluster assignments to indices of the genes in the filtered data
-cluster_indexes = []
-
-# Calculate the sum of the expression of each gene in each cluster
-cluster_sums = np.zeros((network_data.n_obs, len(cluster_assignments)))
-for i,gene_ids in enumerate(cluster_assignments):
-    # Get all the rows in the data that correspond to the current cluster
-    for gene_id in gene_ids:
-        if gene_id in id_row:
-            cluster_sums[:,i] += adata.X[:,id_row[gene_id]]
-
-#%%
-# Get the GO enrichment associated with each cluster
-cluster_enrichment = pickle.load(open('../data/cluster_enrichments_louvain.pickle', 'rb'))
-# Convert to a dictionary of clusters and terms with only the p<.01 terms
-cluster_terms = {}
-for cluster,term,pval,genes in cluster_enrichment:
-    if pval < .01:
-        if cluster not in cluster_terms: cluster_terms[cluster] = []
-        cluster_terms[cluster].append((term,pval,genes))
-
-#%%
-# Plot the UMAP embedding of the filtered data colored by the total gene expression of each cluster
-# Normalize the expression of each cluster
-from matplotlib import pyplot as plt
-expression_sum_nrm = cluster_sums/(cluster_sums.max(axis=0))
-
-# Filter words that are relevant to development
-positive_words = ['develop', 'signal', 'matrix', 
-                'organization', 'proliferation', 'stem', 'pathway', 'epithel', 'mesenchym',
-                'morpho', 'mesoderm', 'endoderm', 'different', 'specification']
-
-plt.figure(figsize=(20,10))
-for i in range(cluster_sums.shape[1]):
-    if i in cluster_terms:
-        plt.scatter(network_data.obsm['X_umap'][:,0], 
-                    network_data.obsm['X_umap'][:,1], 
-                    c=expression_sum_nrm[:,i], 
-                    s=10, alpha=.5, cmap='viridis', vmin=0, vmax=1)
-        # Title the plot
-        plt.title(f'Cluster {i} {genotype} expression')
-        # Add the enrichment terms to the side of the plot as a legend
-        legend = ['Terms:']
-        # Sort the terms by p-value
-        for cluster in cluster_terms:
-            cluster_terms[cluster] = sorted(cluster_terms[cluster], key=lambda x: x[1])
-
-        enriched_genes = set()
-        c = 0
-        for term,pval,genes in cluster_terms[i]:
-            if any([word in term.lower() for word in positive_words]) and pval<.05:
-                legend.append(f'• {term} {pval:.2e}')
-                enriched_genes.update(genes)
-                c += 1
-                if c > 10: break
-
-        legend.append('\n')
-        legend.append('Genes:')
-        legend.append(', '.join(enriched_genes))
-        # Add blank space to the right side of the plot
-        plt.subplots_adjust(right=.7)
-        # Add the terms to the plot as a box to the right side
-        plt.text(1.05, .5, '\n'.join(legend), verticalalignment='center', wrap=True, fontsize=12,
-                 transform=plt.gca().transAxes)
-        # Remove the axis labels and ticks
-        plt.xlabel('')
-        plt.ylabel('')
-        plt.xticks([])
-        plt.yticks([])
-
-        # Save the plot
-        plt.savefig(f'../figures/gene_cluster_heatmaps/{genotype}_cluster_{i}_expression.png', dpi=300)
-        # Clear the plot
-        plt.clf()
-
+plot_qc_distributions(network_data, genotype, 'network_genes', '../figures')
 
 #%%
 # Assign initial points to be cells with high expression of cluster 0
@@ -230,7 +110,6 @@ top_percentile = np.percentile(cluster_sums[:,0], 99)
 initial_points = np.where(cluster_sums[:,0] > top_percentile)[0]
 
 #%%
-import pyVIA.core as via
 pseudotime = via.VIA(network_data.X, 
                      knn=30,
                      cluster_graph_pruning_std=0.5,
@@ -243,10 +122,22 @@ pseudotime.run_VIA()
 pickle.dump(pseudotime, open(f'../data/{genotype}_pseudotime.pickle', 'wb'))
 
 # %%
-f, ax = via.plot_scatter(embedding = network_data.obsm['X_umap'], 
-                         labels = pseudotime.single_cell_pt_markov,
-                         cmap = 'plasma')
+plt.figure(figsize=(10,10))
+plt.scatter(network_data.obsm['X_umap'][:,0], network_data.obsm['X_umap'][:,1], 
+            c = pseudotime.single_cell_pt_markov,
+            cmap = 'plasma',
+            s=1, alpha=.5)
+plt.title(f'{genotype.capitalize()} pseudotime')
+# Remove x and y axis labels and ticks
+plt.xlabel('UMAP 1')
+plt.ylabel('UMAP 2')
+plt.xticks([])
+plt.yticks([])
+# Add a colorbar
+plt.colorbar()
+
 plt.savefig(f'../figures/pseudotime/{genotype}_pseudotime.png', dpi=300)
+
 
 # %%
 via.draw_trajectory_gams(via_object=pseudotime, embedding=network_data.obsm['X_umap'], 
