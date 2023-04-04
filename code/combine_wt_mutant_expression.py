@@ -213,4 +213,65 @@ for i in range(cluster_sums.shape[1]):
         plt.savefig(f'../figures/gene_cluster_heatmaps/cluster_{i}_expression.png', dpi=300)
         # Clear the plot
         plt.clf();
+
+# %%
+# Plot pseudotime vs cluster expression for WT and mutant side by side
+from sklearn.linear_model import BayesianRidge
+import scipy
+
+n_clusters = cluster_sums.shape[1]
+fig, axs = plt.subplots(n_clusters,2, figsize=(10,5*n_clusters))
+regressions = []
+for i in range(n_clusters):
+    # Rmove the vertical gridlines
+    axs[i,0].grid(axis='x')
+    axs[i,1].grid(axis='x')
+    # Set the y axis limits to be the same for both plots
+    axs[i,0].set_ylim(0, 1)
+    axs[i,1].set_ylim(0, 1)
+    # Set the x axis limits to be the same for both plots
+    axs[i,0].set_xlim(0, 1)
+    axs[i,1].set_xlim(0, 1)
+
+    # Fit a linear regression of the relationship between the pseudotime and cluster expression
+    regression = BayesianRidge()
+    wt_pseudotime = np.array(wt_via.single_cell_pt_markov).reshape(-1,1)
+    mut_pseudotime = np.array(mut_via.single_cell_pt_markov).reshape(-1,1)
+    wt_expr = expression_sum_nrm[:wt.shape[0],i]
+    mut_expr = expression_sum_nrm[wt.shape[0]:,i]
+    fit = regression.fit(wt_pseudotime, wt_expr)
+    regressions.append(fit)
+    x = np.linspace(0,1,100).reshape(-1,1)
+    wt_y, std = fit.predict(x, return_std=True)
+    axs[i,0].plot(x, wt_y, c='r')
+    # Plot the regression line with a standard deviation of the fit
+    axs[i,0].fill_between(x.flatten(), wt_y-std, wt_y+std, color='grey', alpha=.2)
+    axs[i,0].fill_between(x.flatten(), wt_y-std*3, wt_y+std*3, color='red', alpha=.2)
+    # Plot the WT regression predictions on the mutant plot
+    # For each point in the mutant plot calculate the number of standard deviations away from the regression line
+    mut_y, mut_std = fit.predict(mut_pseudotime, return_std=True)
+    axs[i,1].plot(mut_pseudotime, mut_y, c='r')
+    # Given the standard deviation of the WT regression line, 
+    # calculate the probability of the mutant data
+    error = mut_y - mut_expr
+    mut_prob = scipy.stats.norm.pdf(error, loc=0, scale=mut_std)
+    
+        
+    axs[i,0].scatter(wt_pseudotime, expression_sum_nrm[:wt.shape[0],i], s=1, alpha=1)
+    axs[i,1].scatter(mut_pseudotime, expression_sum_nrm[wt.shape[0]:,i], 
+                     s=1, alpha=1, c=dists)
+    axs[i,0].set_ylabel(f'Cluster {i} expression', fontsize=8)
+    # Plot one standard error bar of the WT regression line on the mutant data
+    axs[i,1].fill_between(x.flatten(), wt_y-std, wt_y+std, color='grey', alpha=.2)
+    axs[i,1].fill_between(x.flatten(), wt_y-std*3, wt_y+std*3, color='red', alpha=.2)
+    # Calculate percentage of points outside 3 std
+    gt3std = np.abs(error) > mut_std*3
+    print(f'Cluster {i} mutant points outside 3 std: {gt3std.sum()/mut_y.shape[0]*100:.2f}%')
+    
+    
+axs[0,0].set_title('Wildtype')
+axs[0,1].set_title('Mutant')
+axs[-1,0].set_xlabel('Pseudotime')
+axs[-1,0].set_xlabel('Pseudotime');
+
 # %%
