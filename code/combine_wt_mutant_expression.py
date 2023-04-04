@@ -183,17 +183,22 @@ for i in range(cluster_sums.shape[1]):
                 cluster_terms[cluster] = sorted(cluster_terms[cluster], key=lambda x: x[1])
 
             enriched_genes = set()
+            all_genes = set()
             c = 0
             for term,pval,genes in cluster_terms[i]:
                 if any([word in term.lower() for word in positive_words]) and pval<.05:
                     legend.append(f'• {term} {pval:.2e}')
                     enriched_genes.update(genes)
+                    all_genes.update(genes)
                     c += 1
                     if c > 10: break
 
             legend.append('\n')
-            legend.append('Genes:')
+            legend.append('Matched Genes:')
             legend.append(', '.join(enriched_genes))
+            legend.append('\n')
+            legend.append('All Genes in Cluster:')
+            legend.append(', '.join(all_genes))
             # Add blank space to the bottom of the plot to accomodate the text
             # Remove the axis labels and ticks
             ax.set_xlabel('')
@@ -220,7 +225,7 @@ from sklearn.linear_model import BayesianRidge
 import scipy
 
 n_clusters = cluster_sums.shape[1]
-fig, axs = plt.subplots(n_clusters,2, figsize=(10,5*n_clusters))
+fig, axs = plt.subplots(n_clusters, 3, figsize=(15,5*n_clusters))
 regressions = []
 for i in range(n_clusters):
     # Rmove the vertical gridlines
@@ -244,9 +249,7 @@ for i in range(n_clusters):
     x = np.linspace(0,1,100).reshape(-1,1)
     wt_y, std = fit.predict(x, return_std=True)
     axs[i,0].plot(x, wt_y, c='r')
-    # Plot the regression line with a standard deviation of the fit
-    axs[i,0].fill_between(x.flatten(), wt_y-std, wt_y+std, color='grey', alpha=.2)
-    axs[i,0].fill_between(x.flatten(), wt_y-std*3, wt_y+std*3, color='red', alpha=.2)
+
     # Plot the WT regression predictions on the mutant plot
     # For each point in the mutant plot calculate the number of standard deviations away from the regression line
     mut_y, mut_std = fit.predict(mut_pseudotime, return_std=True)
@@ -261,17 +264,48 @@ for i in range(n_clusters):
     axs[i,1].scatter(mut_pseudotime, expression_sum_nrm[wt.shape[0]:,i], 
                      s=1, alpha=1, c=dists)
     axs[i,0].set_ylabel(f'Cluster {i} expression', fontsize=8)
-    # Plot one standard error bar of the WT regression line on the mutant data
-    axs[i,1].fill_between(x.flatten(), wt_y-std, wt_y+std, color='grey', alpha=.2)
-    axs[i,1].fill_between(x.flatten(), wt_y-std*3, wt_y+std*3, color='red', alpha=.2)
-    # Calculate percentage of points outside 3 std
+    # Plot standard error bars of the WT regression line on the mutant data
+    for j in range(3):
+        axs[i,0].fill_between(x.flatten(), wt_y-std*(j+1), wt_y+std*(j+1), color='grey', alpha=.2)
+        axs[i,1].fill_between(x.flatten(), wt_y-std*(j+1), wt_y+std*(j+1), color='grey', alpha=.2)
+
+    # Plot the mutant data colored by the probability of the data given the WT regression line
     gt3std = np.abs(error) > mut_std*3
+    gt2std = np.abs(error) > mut_std*2
     print(f'Cluster {i} mutant points outside 3 std: {gt3std.sum()/mut_y.shape[0]*100:.2f}%')
-    
+    # Convert boolean array to int array
+    outliers = gt2std.astype(int) + gt3std.astype(int)
+    axs[i,2].scatter(mut_emb[:,0], mut_emb[:,1], s=1, alpha=.75, c=outliers, cmap='Reds')
+    axs[i,2].set_title(f'Prob. under WT pseudotime regression')
     
 axs[0,0].set_title('Wildtype')
 axs[0,1].set_title('Mutant')
 axs[-1,0].set_xlabel('Pseudotime')
 axs[-1,0].set_xlabel('Pseudotime');
+
+#%%
+#  Plot the UMAP with the cell type labels
+wt_meta = pickle.load(open('../data/cell_metadata_wildtype.pickle', 'rb'))
+mut_meta = pickle.load(open('../data/cell_metadata_mutant.pickle', 'rb'))
+wt_cell_types = [cell['cell_type'] for cell in wt_meta]
+mut_cell_types = [cell['cell_type'] for cell in mut_meta]
+
+cell_ints = list(set(wt_cell_types + mut_cell_types))
+wt_cell_ints = [cell_ints.index(cell_type) for cell_type in wt_cell_types]
+mut_cell_ints = [cell_ints.index(cell_type) for cell_type in mut_cell_types]
+fig, axs = plt.subplots(1,2, figsize=(10,5))
+axs[0].scatter(wt_emb[:,0], wt_emb[:,1], s=1, alpha=.75, c=wt_cell_ints, cmap='tab20')
+axs[1].scatter(mut_emb[:,0], mut_emb[:,1], s=1, alpha=.75, c=mut_cell_ints, cmap='tab20')
+axs[0].set_title('Wildtype')
+axs[1].set_title('Mutant')
+# Add a legend for the cell types
+handles = []
+from matplotlib import patches as mpatches
+for i, cell_type in enumerate(cell_ints):
+    handles.append(mpatches.Patch(color=plt.cm.tab20(i), label=cell_type))
+
+axs[1].legend(handles=handles, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.);
+# Save the plot
+plt.savefig(f'../figures/umap_cell_types.png', dpi=300)
 
 # %%
