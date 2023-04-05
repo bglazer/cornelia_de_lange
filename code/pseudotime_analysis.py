@@ -103,6 +103,19 @@ pickle.dump(pca, open(f'../data/pca_{genotype}.pickle', 'wb'))
 plot_qc_distributions(network_data, genotype, 'network_genes', '../figures')
 
 #%%
+# Import the cluster assigments of each gene from the Tiana et al paper
+cluster_assignments = pickle.load(open('../data/louvain_clusters.pickle', 'rb'))
+# Convert the cluster assignments to indices of the genes in the filtered data
+cluster_indexes = []
+# Calculate the sum of the expression of each gene in each cluster
+cluster_sums = np.zeros((network_data.n_obs, len(cluster_assignments))) 
+
+for i,gene_ids in enumerate(cluster_assignments):
+    # Get all the rows in the data that correspond to the current cluster
+    for gene_id in gene_ids:
+        if gene_id in id_row:
+            cluster_sums[:,i] += adata.X[:, id_row[gene_id]]
+#%%
 # Assign initial points to be cells with high expression of cluster 0
 # Get the index of 99th percentile of cluster 0 expression
 top_percentile = np.percentile(cluster_sums[:,0], 99)

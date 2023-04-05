@@ -3,6 +3,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 import scanpy as sc
 from umap import UMAP
+from util import filter_to_network
 
 #%% 
 # Set the random seed for reproducibility
@@ -21,32 +22,10 @@ adata.obs['batch'] = adata.obs['batch'].astype('category')
 
 #%%
 import pickle
-def filter_to_network(adata, min_cells=3):    
-    # Import gene network from Tiana et al paper
-    graph = pickle.load(open('../data/filtered_graph.pickle', 'rb'))
-    protein_id_to_name = pickle.load(open('../data/protein_id_to_name.pickle', 'rb'))
-    protein_name_to_ids = pickle.load(open('../data/protein_names.pickle', 'rb'))
-    indices_of_nodes_in_graph = []
-    data_ids = {}
-    id_row = {}
-    for i,name in enumerate(adata.var_names):
-        name = name.upper()
-        if name in protein_name_to_ids:
-            for id in protein_name_to_ids[name]:
-                if id in graph.nodes:
-                    indices_of_nodes_in_graph.append(i)
-                    if id in data_ids:
-                        print('Duplicate id', id, name, data_ids[id])
-                    data_ids[id] = name
-                    id_row[id] = i
-    # Filter the data to only include the genes in the Nanog regulatory network
-    network_data = adata[:,indices_of_nodes_in_graph]
-    network_data.var_names = [adata.var_names[i] for i in indices_of_nodes_in_graph]
-    return network_data, id_row
 
-network_data, id_row = filter_to_network(adata)
-wt_net, _ = filter_to_network(wt)
-mut_net, _ = filter_to_network(mut)
+network_data, id_row, id_new_row = filter_to_network(adata)
+wt_net, wt_id_row, wt_id_new_row = filter_to_network(wt)
+mut_net, mut_id_row, mut_id_new_row = filter_to_network(mut)
 
 #%%
 # UMAP embedding of the combined data
@@ -157,7 +136,7 @@ positive_words = ['develop', 'signal', 'matrix',
 
 # Plot the cluster sums for wildtype and mutant side by side
 for i in range(cluster_sums.shape[1]):
-    fig,axs = plt.subplots(1,2, figsize=(10,10))
+    fig,axs = plt.subplots(1,2, figsize=(10,10));
     print(i, flush=True)
     if i in cluster_terms:
         for genotype in ['wildtype', 'mutant']:
@@ -247,7 +226,7 @@ for i in range(n_clusters):
     fit = regression.fit(wt_pseudotime, wt_expr)
     regressions.append(fit)
     x = np.linspace(0,1,100).reshape(-1,1)
-    wt_y, std = fit.predict(x, return_std=True)
+    wt_y, wt_std = fit.predict(x, return_std=True)
     axs[i,0].plot(x, wt_y, c='r')
 
     # Plot the WT regression predictions on the mutant plot
@@ -266,36 +245,89 @@ for i in range(n_clusters):
     axs[i,0].set_ylabel(f'Cluster {i} expression', fontsize=8)
     # Plot standard error bars of the WT regression line on the mutant data
     for j in range(3):
-        axs[i,0].fill_between(x.flatten(), wt_y-std*(j+1), wt_y+std*(j+1), color='grey', alpha=.2)
-        axs[i,1].fill_between(x.flatten(), wt_y-std*(j+1), wt_y+std*(j+1), color='grey', alpha=.2)
+        axs[i,0].fill_between(x.flatten(), wt_y-wt_std*(j+1), wt_y+wt_std*(j+1), color='grey', alpha=.2)
+        axs[i,1].fill_between(x.flatten(), wt_y-wt_std*(j+1), wt_y+wt_std*(j+1), color='grey', alpha=.2)
 
     # Plot the mutant data colored by the probability of the data given the WT regression line
     gt3std = np.abs(error) > mut_std*3
     gt2std = np.abs(error) > mut_std*2
-    print(f'Cluster {i} mutant points outside 3 std: {gt3std.sum()/mut_y.shape[0]*100:.2f}%')
-    # Convert boolean array to int array
+    # Convert boolean array to int array so we can add them for the color map
     outliers = gt2std.astype(int) + gt3std.astype(int)
+    axs[i,2].set_title(f'Cells >2 std from WT pseudotime regression')
     axs[i,2].scatter(mut_emb[:,0], mut_emb[:,1], s=1, alpha=.75, c=outliers, cmap='Reds')
-    axs[i,2].set_title(f'Prob. under WT pseudotime regression')
+    # Print the percentage of points outside 2 and 3 standard deviations
+    # as text in the upper right corner of the plot
+    xlim = axs[i,2].get_xlim()[1]
+    ylim = axs[i,2].get_ylim()[1]
+    std_text = f'>2 std: {gt2std.sum()/mut_y.shape[0]*100:.2f}%'
+    std_text += f'\n>3 std: {gt3std.sum()/mut_y.shape[0]*100:.2f}%'
+    axs[i,2].text(xlim*.95, ylim*.95, 
+                  horizontalalignment='right',
+                  verticalalignment='top',
+                  s=std_text)
+    # Remove the axis labels and ticks
+    axs[i,2].set_xlabel('UMAP 1')
+    axs[i,2].set_ylabel('UMAP 2')
+    axs[i,2].set_xticks([])
+    axs[i,2].set_yticks([])
+    axs[i,2].grid(False)
     
 axs[0,0].set_title('Wildtype')
 axs[0,1].set_title('Mutant')
 axs[-1,0].set_xlabel('Pseudotime')
 axs[-1,0].set_xlabel('Pseudotime');
+# Save the plot
+plt.savefig('../figures/pseudotime_vs_cluster_expression.png', dpi=300)
+
 
 #%%
 #  Plot the UMAP with the cell type labels
-wt_meta = pickle.load(open('../data/cell_metadata_wildtype.pickle', 'rb'))
-mut_meta = pickle.load(open('../data/cell_metadata_mutant.pickle', 'rb'))
-wt_cell_types = [cell['cell_type'] for cell in wt_meta]
-mut_cell_types = [cell['cell_type'] for cell in mut_meta]
+wt_cell_types = wt_net.obs['cell_type']
+mut_cell_types = mut_net.obs['cell_type']
 
-cell_ints = list(set(wt_cell_types + mut_cell_types))
+cell_ints = list(set(wt_cell_types) | set(mut_cell_types))
 wt_cell_ints = [cell_ints.index(cell_type) for cell_type in wt_cell_types]
 mut_cell_ints = [cell_ints.index(cell_type) for cell_type in mut_cell_types]
 fig, axs = plt.subplots(1,2, figsize=(10,5))
-axs[0].scatter(wt_emb[:,0], wt_emb[:,1], s=1, alpha=.75, c=wt_cell_ints, cmap='tab20')
-axs[1].scatter(mut_emb[:,0], mut_emb[:,1], s=1, alpha=.75, c=mut_cell_ints, cmap='tab20')
+# Plot each cell type individiually so we can add a legend
+for i, cell_type in enumerate(cell_ints):
+    wt_mask = np.array(wt_cell_ints) == i
+    mut_mask = np.array(mut_cell_ints) == i
+    axs[0].scatter(wt_emb[wt_mask,0], wt_emb[wt_mask,1], s=.5, alpha=1, 
+                   c=plt.cm.tab20(i), label=cell_type)
+    axs[1].scatter(mut_emb[mut_mask,0], mut_emb[mut_mask,1], s=.5, alpha=1, 
+                   c=plt.cm.tab20(i), label=cell_type)
+
+axs[0].set_title('Wildtype')
+axs[1].set_title('Mutant')
+# Remove the ticks
+for i in range(2):
+    axs[i].set_xticks([])
+    axs[i].set_yticks([])
+    axs[i].set_xlabel('UMAP 1')
+    axs[i].set_ylabel('UMAP 2')
+    axs[i].grid(False)
+
+# Add a legend for the cell types
+handles = [mpatches.Patch(color=plt.cm.tab20(i), label=cell_ints[i]) 
+           for i in range(len(cell_ints))]
+axs[1].legend(handles=handles, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0.);
+# Save the plot
+plt.savefig(f'../figures/umap_cell_types.png', dpi=300)
+
+# %%
+#  Plot the UMAP with the cell line labels
+wt_cell_lines = wt_net.obs['cell_line']
+mut_cell_lines = mut_net.obs['cell_line']
+
+cell_ints = list(set(wt_cell_lines) | set(mut_cell_lines))
+wt_cell_ints = [cell_ints.index(cell_type) for cell_type in wt_cell_lines]
+mut_cell_ints = [cell_ints.index(cell_type) for cell_type in mut_cell_lines]
+fig, axs = plt.subplots(1,2, figsize=(10,5))
+axs[0].scatter(wt_emb[:,0], wt_emb[:,1], s=1, alpha=.75,
+               c=wt_cell_ints, cmap='tab20')
+axs[1].scatter(mut_emb[:,0], mut_emb[:,1], s=1, alpha=.75, 
+               c=mut_cell_ints, cmap='tab20')
 axs[0].set_title('Wildtype')
 axs[1].set_title('Mutant')
 # Add a legend for the cell types
@@ -308,4 +340,45 @@ axs[1].legend(handles=handles, bbox_to_anchor=(1.05, 1), loc='upper left', borde
 # Save the plot
 plt.savefig(f'../figures/umap_cell_types.png', dpi=300)
 
+# %%
+# Make a heatmap of the expression fo each gene in the cluster across time
+# Get the expression of genes in each cluster
+protein_id_to_row = pickle.load(open('../data/wildtype_id_row.pickle', 'rb'))
+wt_gene_expr = []
+for cluster, gene_ids in enumerate(cluster_assignments):
+    wt_gene_expr.append(np.zeros((wt_net.shape[0], len(gene_ids))))
+    # Sort cells by pseudotime
+    wt_pseudotime_sorted = wt.X[np.argsort(wt_pseudotime.flatten()),:]
+    # Get all the rows in the data that correspond to the current cluster   
+    for i,gene_id in enumerate(gene_ids):
+        if gene_id in protein_id_to_row:
+            row = protein_id_to_row[gene_id]
+            wt_gene_expr[cluster][:,i] = wt_pseudotime_sorted[:, row]
+    mean = wt_gene_expr[cluster].mean(axis=1)
+    wt_gene_expr[cluster] = np.hstack((wt_gene_expr[cluster], mean[:,None]))
+
+# %%
+# Plot the heatmap
+# make a directory to save the heatmaps
+import os
+if not os.path.exists('../figures/expression_heatmap'):
+    os.makedirs('../figures/expression_heatmap')
+
+for cluster in range(len(cluster_assignments)):
+    plt.figure(figsize=(10,5));
+    plt.imshow(wt_gene_expr[cluster].T, interpolation='none', aspect='auto', cmap='viridis');
+    plt.ylabel('Gene');
+    plt.xlabel('Cell');
+    plt.title('Wildtype');
+    # Remove the vertical grid
+    plt.colorbar();
+    # Add gene name labels to the x axis
+    protein_id_to_name = pickle.load(open('../data/protein_id_to_name.pickle', 'rb'))
+    gene_ids = [list(protein_id_to_name[gene_id])[0] for gene_id in cluster_assignments[cluster]] + ['Mean']
+    plt.yticks(np.arange(len(gene_ids)), gene_ids, fontsize=8);
+    plt.savefig(f'../figures/expression_heatmap/cluster_{i}_gene_expression_heatmap.png', dpi=300);
+    plt.clf();
+
+# %%
+plt.plot(wt_gene_expr[0][:,-1])
 # %%

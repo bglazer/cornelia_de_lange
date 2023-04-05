@@ -92,3 +92,30 @@ def plot_qc_distributions(adata, genotype, name, figdir):
     plt.savefig(f'{figdir}/{name}_cumulative_expression_per_cell_{genotype}.png', dpi=300)
     plt.close()
 
+import pickle
+def filter_to_network(adata):    
+    # Import gene network from Tiana et al paper
+    graph = pickle.load(open('../data/filtered_graph.pickle', 'rb'))
+    protein_id_to_name = pickle.load(open('../data/protein_id_to_name.pickle', 'rb'))
+    protein_name_to_ids = pickle.load(open('../data/protein_names.pickle', 'rb'))
+    indices_of_nodes_in_graph = []
+    data_ids = {}
+    id_row = {}
+    id_new_row = {}
+    new_row = 0
+    for i,name in enumerate(adata.var_names):
+        name = name.upper()
+        if name in protein_name_to_ids:
+            for id in protein_name_to_ids[name]:
+                if id in graph.nodes:
+                    indices_of_nodes_in_graph.append(i)
+                    if id in data_ids:
+                        print('Duplicate id', id, name, data_ids[id])
+                    data_ids[id] = name
+                    id_row[id] = i
+                    id_new_row[id] = new_row
+                    new_row += 1
+    # Filter the data to only include the genes in the Nanog regulatory network
+    network_data = adata[:,indices_of_nodes_in_graph]
+    network_data.var_names = [adata.var_names[i] for i in indices_of_nodes_in_graph]
+    return network_data, id_row, id_new_row
