@@ -30,10 +30,6 @@ T = via.sc_transition_matrix(smooth_transition=1)
 
 V = velocity_vectors(T, X)
 
-# bad hack that I have to do because VIA doesn't like working with low dimensional data
-# Setting nan values to zero. Nan values occur when a point has no neighbors
-V[np.isnan(V).sum(axis=1) > 0] = 0
-
 #%%
 def embed(X):
     return pca_.transform(X)[:,1:3]

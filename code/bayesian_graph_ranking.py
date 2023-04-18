@@ -99,4 +99,11 @@ pos = sfdp_layout(graph, cooling_step=0.99, multilevel=False, R=50000,
 ranked.levels[0].draw(pos=pos)
 
 # %%
-# Save the ranking
+# Output the ranking as a csv file for Gephi
+
+with open('../data/ranked_genes.csv', 'w') as f:
+    f.write('Id,Rank\n')
+    for rank, (gene_id, gene_name) in enumerate(ranking):
+        f.write(f'{gene_id},{rank}\n')
+
+# %%

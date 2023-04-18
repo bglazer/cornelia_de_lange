@@ -53,8 +53,8 @@ def velocity_vectors(T, X):
         dX[np.isnan(dX)] = 0  # zero diff in a steady-state
         #neighbor edge weights are used to weight the overall dX or velocity from cell i.
         probs =  T[i].data
-        #if probs.size ==0: print('velocity embedding probs=0 length', probs, i, self.true_label[i])
-        V[i] = probs.dot(dX) - probs.mean() * dX.sum(0)
+        # TODO what is the second term doing?
+        V[i] = probs.dot(dX) #- probs.mean() * dX.sum(0)
     # Set rows with any nan to all zero
     V[np.isnan(V).sum(axis=1) > 0] = 0
     return V
@@ -70,25 +70,25 @@ def embed_velocity(X, velocity, embed_fn):
 def plot_qc_distributions(adata, genotype, name, figdir):
     # Plot the overall distribution of total gene expression
     plt.hist(adata.X.sum(axis=1), bins=100)
-    plt.title('Distribution of total gene expression per cell across all genes');
+    plt.title(f'{genotype.capitalize()} Distribution of total gene expression per cell across all genes');
     plt.savefig(f'{figdir}/{name}_total_expression_per_cell_{genotype}.png', dpi=300)
     plt.close()
 
     # Plot the distribution of gene expression for each gene
     plt.hist(np.log10(adata.X.sum(axis=0)+1), bins=100)
-    plt.title('Log Distribution of total expression per gene across all cells');
+    plt.title(f'{genotype.capitalize()} Log Distribution of total expression per gene across all cells');
     plt.savefig(f'{figdir}/{name}_log_expression_per_gene_{genotype}.png', dpi=300)
     plt.close()
 
     # Plot the number of genes with expression > 0 per cell
     plt.hist((adata.X>0).sum(axis=0), bins=100);
-    plt.title('Distribution of number of cells with expression > 0 per gene');
+    plt.title(f'{genotype.capitalize()} Distribution of number of cells with expression > 0 per gene');
     plt.savefig(f'{figdir}/{name}_nonzero_expression_per_gene_{genotype}.png', dpi=300)
     plt.close()
 
     # Plot the cumulative distribution of total gene expression per cell
     plt.hist(adata.X.sum(axis=1), bins=100, cumulative=True);
-    plt.title('Cumulative distribution of total gene expression per cell');
+    plt.title(f'{genotype.capitalize()} Cumulative distribution of total gene expression per cell');
     plt.savefig(f'{figdir}/{name}_cumulative_expression_per_cell_{genotype}.png', dpi=300)
     plt.close()
 
@@ -100,7 +100,6 @@ def filter_to_network(adata):
     protein_name_to_ids = pickle.load(open('../data/protein_names.pickle', 'rb'))
     indices_of_nodes_in_graph = []
     data_ids = {}
-    id_row = {}
     id_new_row = {}
     new_row = 0
     for i,name in enumerate(adata.var_names):
@@ -112,10 +111,21 @@ def filter_to_network(adata):
                     if id in data_ids:
                         print('Duplicate id', id, name, data_ids[id])
                     data_ids[id] = name
-                    id_row[id] = i
                     id_new_row[id] = new_row
                     new_row += 1
     # Filter the data to only include the genes in the Nanog regulatory network
     network_data = adata[:,indices_of_nodes_in_graph]
     network_data.var_names = [adata.var_names[i] for i in indices_of_nodes_in_graph]
-    return network_data, id_row, id_new_row
+    network_data.uns['id_row'] = id_new_row
+    return network_data
+
+
+def umap_axes(axs):
+    if not isinstance(axs, (list, np.ndarray)):
+        axs = [axs]
+
+    for ax in axs:
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_xlabel('UMAP 1')
+        ax.set_ylabel('UMAP 2')
