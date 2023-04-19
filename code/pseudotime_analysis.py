@@ -127,6 +127,6 @@ wt_data.obs['pseudotime'] = wt_pseudotime.single_cell_pt_markov
 mut_data.obs['pseudotime'] = mut_pseudotime.single_cell_pt_markov
 wt_data.obsm['transition_matrix'] = wt_pseudotime.sc_transition_matrix(smooth_transition=1)
 mut_data.obsm['transition_matrix'] = mut_pseudotime.sc_transition_matrix(smooth_transition=1)
-wt_data.write_h5ad('../data/wildtype_net_pseudotime.h5ad')
-mut_data.write_h5ad('../data/mutant_net_pseudotime.h5ad')
+wt_data.write_h5ad('../data/wildtype_net.h5ad')
+mut_data.write_h5ad('../data/mutant_net.h5ad')
 # %%
