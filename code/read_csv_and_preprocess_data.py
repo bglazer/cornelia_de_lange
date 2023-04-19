@@ -153,6 +153,6 @@ wt_net.write('../data/wildtype_net.h5ad')
 mut_net.write('../data/mutant_net.h5ad')
 # %%
 # Save the unfiltered AnnData objects as h5ad files
-wt_adata.write('../data/wildtype.h5ad')
-mut_adata.write('../data/mutant.h5ad')
+wt_adata.write('../data/wildtype_full.h5ad')
+mut_adata.write('../data/mutant_full.h5ad')
 # %%
