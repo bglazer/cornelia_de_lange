@@ -34,8 +34,8 @@ color_codes = {c: i for i,c in enumerate(cell_types)}
 wt_cell_colors = [color_codes[c] for c in wt.obs['cell_type']]
 mut_cell_colors = [color_codes[c] for c in mut.obs['cell_type']]
 
-pc1 = 1
-pc2 = 2
+pc1 = 0
+pc2 = 1
 
 axs[0][0].scatter(wt_pca[:,pc1], wt_pca[:,pc2], c=wt_cell_colors, cmap = 'tab20', s=.1)
 axs[1][0].scatter(mut_pca[:,pc1], mut_pca[:,pc2], c=mut_cell_colors, cmap = 'tab20', s=.1)
@@ -160,4 +160,56 @@ ax.legend(ncol=1, bbox_to_anchor=(1, 1), loc='upper left', fontsize='small')
 plt.tight_layout()
 print(generalist_cell_type_df.T)
 
+# %%
+# Make a heatmap of archetype  versus cluster sum
+# Fill NaNs with 0
+wt.obs['specialists_pca_diffdist'].cat.add_categories('Generalist', inplace=True)
+wt.obs['specialists_pca_diffdist'] = wt.obs['specialists_pca_diffdist'].fillna('Generalist')
+# Reset the index of the specialist column so that it can be used as a column
+wt.obs['specialists_pca_diffdist'].reset_index(drop=True, inplace=True)
+#%%
+mut.obs['specialists_pca_diffdist'].cat.add_categories('Generalist', inplace=True)
+mut.obs['specialists_pca_diffdist'] = mut.obs['specialists_pca_diffdist'].fillna('Generalist')
+mut.obs['specialists_pca_diffdist'].reset_index(drop=True, inplace=True)
+
+
+#%%
+wt_cluster_sum = pd.DataFrame(wt.obsm['cluster_sums']).groupby(wt.obs['specialists_pca_diffdist']).sum()
+mut_cluster_sum = pd.DataFrame(mut.obsm['cluster_sums']).groupby(mut.obs['specialists_pca_diffdist']).sum()
+
+# Normalize the sum of each cluster to 1
+wt_cluster_mean = wt_cluster_sum.div(wt_cluster_sum.sum(axis=0), axis=1)
+mut_cluster_mean = mut_cluster_sum.div(mut_cluster_sum.sum(axis=0), axis=1)
+
+# Compute the overrepresentation of each cluster in each archetype
+# What percentage of cells are in each archetype?
+wt_archetype_pct = wt.obs['specialists_pca_diffdist'].value_counts(normalize=True)
+mut_archetype_pct = mut.obs['specialists_pca_diffdist'].value_counts(normalize=True)
+# For each archetype, compute the difference between the percentage of cells in that archetype
+#  and the percentage of cluster expression in the archetype
+wt_pct_diffs = wt_cluster_mean.sort_index().values - wt_archetype_pct.sort_index().values[:,None]
+wt_pct_diffs = pd.DataFrame(wt_pct_diffs, index=wt_cluster_mean.index, columns=wt_cluster_mean.columns)
+mut_pct_diffs = mut_cluster_mean.sort_index().values - mut_archetype_pct.sort_index().values[:,None]
+mut_pct_diffs = pd.DataFrame(mut_pct_diffs, index=mut_cluster_mean.index, columns=mut_cluster_mean.columns)
+
+#%%
+# Plot the heatmap
+fig, axs = plt.subplots(1,2, figsize=(10,5))
+axs[0].imshow(wt_pct_diffs, cmap='viridis', aspect='auto')
+axs[0].set_title('Wildtype')
+axs[0].set_xticks(wt_pct_diffs.columns)
+nyticks = len(wt_pct_diffs.index)
+axs[0].set_yticks(range(nyticks), wt_cluster_mean.index.to_list())
+axs[1].imshow(mut_pct_diffs, cmap='viridis', aspect='auto')
+axs[1].set_title('Mutant')
+axs[1].set_xticks(mut_pct_diffs.columns)
+nyticks = len(mut_pct_diffs.index)
+axs[1].set_yticks(range(nyticks), mut_pct_diffs.index.to_list())
+# Add a label below the x axis ticks
+axs[0].set_xlabel('Cluster', fontsize=18)
+axs[1].set_xlabel('Cluster', fontsize=18)
+# Add a label to the left of the y axis ticks
+axs[0].set_ylabel('Archetype', fontsize=18)
+# plt.colorbar()
+plt.tight_layout()
 # %%
