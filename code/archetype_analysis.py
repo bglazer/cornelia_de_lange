@@ -1,0 +1,163 @@
+# Archetype analysis
+#%%
+import scanpy as sc
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from util import umap_axes
+# import magic
+
+#%%
+dataset = 'net'
+wt = sc.read_h5ad(f'../data/wildtype_{dataset}.h5ad')
+mut = sc.read_h5ad(f'../data/mutant_{dataset}.h5ad')
+
+# %%
+# Find the number of archetypes in each dataset
+wt_n_archetypes = wt.obsm['arc_distance'].shape[1]
+mut_n_archetypes = mut.obsm['arc_distance'].shape[1]
+print(f'Wildtype has {wt_n_archetypes} archetypes')
+print(f'Mutant has {mut_n_archetypes} archetypes')
+
+#%%
+n_archetypes = max(wt_n_archetypes, mut_n_archetypes)
+fig, axs = plt.subplots(2, n_archetypes+1, figsize=(10,5))
+
+wt_umap = wt.obsm['X_umap']
+mut_umap = mut.obsm['X_umap']
+wt_pca = wt.obsm['X_pca']
+mut_pca = mut.obsm['X_pca']
+
+# Get consistent set of color codes for both mutant and wildtype
+cell_types = pd.concat([wt.obs['cell_type'], mut.obs['cell_type']]).unique()
+color_codes = {c: i for i,c in enumerate(cell_types)}
+wt_cell_colors = [color_codes[c] for c in wt.obs['cell_type']]
+mut_cell_colors = [color_codes[c] for c in mut.obs['cell_type']]
+
+pc1 = 1
+pc2 = 2
+
+axs[0][0].scatter(wt_pca[:,pc1], wt_pca[:,pc2], c=wt_cell_colors, cmap = 'tab20', s=.1)
+axs[1][0].scatter(mut_pca[:,pc1], mut_pca[:,pc2], c=mut_cell_colors, cmap = 'tab20', s=.1)
+axs[0][0].set_title('Wildtype')
+axs[1][0].set_title('Mutant')
+for i in [0,1]:
+    axs[i][0].set_xticks([])
+    axs[i][0].set_yticks([])
+    axs[i][0].set_xlabel('PC2')
+    axs[i][0].set_ylabel('PC3')
+
+def plot_archetype_dist(data, ax, i):
+    archetype_score = data.obs[f'Arc_{i}_PCHA_Score']
+    pca = data.obsm['X_pca']
+    ax.scatter(pca[:,pc1], pca[:,pc2], c = archetype_score, cmap = 'RdBu', s=.2)
+    ax.set_title(f'Archetype {i}')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    return ax
+
+# Color cells by their distance to each archetype
+for i in range(0,n_archetypes):
+    col = i+1
+    if i < wt_n_archetypes:
+        axs[0,col] = plot_archetype_dist(wt, axs[0,col], i+1)
+    else:
+        # If there are more archetypes in the mutant, plot a blank subplot
+        axs[0][col].axis('off')
+    if i < mut_n_archetypes:
+        axs[1,col] = plot_archetype_dist(mut, axs[1,col], i+1)
+    else:
+        axs[1][col].axis('off')
+
+plt.tight_layout()
+
+
+# %%
+# Find the percentage of each cell type in each archetype's "specialists"
+cell_type_pcts = {'wt':{}, 'mut':{}}
+
+for i in range(1,wt_n_archetypes+1):
+    specialists = wt.obs['specialists_pca_diffdist'] == f'Arc_{i}'
+    pcts = wt.obs['cell_type'][specialists].value_counts(normalize=True)
+    cell_type_pcts['wt'][f'Arc_{i}'] = pcts
+
+for i in range(1,mut_n_archetypes+1):
+    specialists = mut.obs['specialists_pca_diffdist'] == f'Arc_{i}'
+    pcts = mut.obs['cell_type'][specialists].value_counts(normalize=True)
+    cell_type_pcts['mut'][f'Arc_{i}'] = pcts
+
+# %%
+# Plot the percentage of each cell type in each archetype's "specialists" as a horizontal stacked bar chart
+# Each bar represents an archetype, split between the cell types that make up the archetype
+def percentage_chart(results, ax, add_colname=True):
+    labels = list(results.index)
+    category_names = list(results.columns)
+    data = results.values
+
+    data_cum = data.cumsum(axis=1)
+    category_colors = plt.colormaps['tab20'](
+        np.linspace(0.15, 0.85, data.shape[1]))
+
+    ax.invert_yaxis()
+    ax.xaxis.set_visible(False)
+    ax.set_xlim(0, 1)
+
+    for i, (colname, color) in enumerate(zip(category_names, category_colors)):
+        widths = data[:, i]
+        starts = data_cum[:, i] - widths
+        rects = ax.barh(labels, widths, left=starts, height=0.5,
+                        label=colname, color=color)
+
+        # Format the labels to be percentages
+        r, g, b, _ = color
+        text_color = 'white' if r * g * b < 0.5 else 'darkgrey'
+        xcenters = starts + widths / 2
+        for y, (x, c) in enumerate(zip(xcenters, widths)):
+            # Only add a label if the percentage is greater than 5%
+            if c > 0.05:
+                # Label with the percentage and the cell type
+                bar_label = f'{c:.0%} {colname}' if add_colname else f'{c:.0%}'
+                ax.text(x, y, bar_label, ha='center', va='center',
+                        color=text_color)
+        # ax.bar_label(rects, label_type='center', color=text_color)
+    # Put a legend in the upper right corner, outside the plot
+    return ax
+
+fig, axs = plt.subplots(1,2, figsize=(10,5))
+axs[0] = percentage_chart(pd.DataFrame(cell_type_pcts['wt']).T, axs[0])
+axs[1] = percentage_chart(pd.DataFrame(cell_type_pcts['mut']).T, axs[1])
+axs[1].legend(ncol=1, bbox_to_anchor=(1, 1),
+              loc='upper left', fontsize='small')
+axs[0].set_title('Wildtype')
+axs[1].set_title('Mutant')
+
+plt.tight_layout()
+
+# %%
+# Get the percentage of generalists in each dataset
+# Generalists are annotated with NaN
+generalists = {'wt':{}, 'mut':{}}
+generalists['wt'] = wt.obs['specialists_pca_diffdist'].isna()
+generalists['mut'] = mut.obs['specialists_pca_diffdist'].isna()
+print("Generalist counts")
+print(f'Wildtype - {generalists["wt"].sum()}')
+print(f'Mutant   - {generalists["mut"].sum()}')
+print("Percentage Generalists")
+print(f'Wildtype - {generalists["wt"].sum()/len(generalists["wt"]):.2%}')
+print(f'Mutant   - {generalists["mut"].sum()/len(generalists["mut"]):.2%}')
+
+# %%
+# Plot the percentage of generalists (i.e. not specialists) that are each cell type 
+generalists_cell_type = {'wt':{}, 'mut':{}}
+generalists_cell_type['wt'] = wt.obs['cell_type'][generalists['wt']].value_counts(normalize=True)
+generalists_cell_type['mut'] = mut.obs['cell_type'][generalists['mut']].value_counts(normalize=True)
+# %%
+generalist_cell_type_df = pd.DataFrame(generalists_cell_type).T
+fig, ax = plt.subplots(1,1, figsize=(5,5))
+ax = percentage_chart(generalist_cell_type_df, ax, add_colname=False)
+ax.set_title('Generalists')
+ax.legend(ncol=1, bbox_to_anchor=(1, 1), loc='upper left', fontsize='small')
+plt.tight_layout()
+print(generalist_cell_type_df.T)
+
+# %%
