@@ -12,7 +12,8 @@ from py_pcha import PCHA
 
 #%%
 genotype = 'mutant'
-adata = sc.read_h5ad(f'../data/{genotype}_net_pseudotime.h5ad')
+dataset = 'full'
+adata = sc.read_h5ad(f'../data/{genotype}_{dataset}.h5ad')
 #%%
 # ## MAGIC
 # For stronger PCHA, we'll run MAGIC.
@@ -28,6 +29,7 @@ sc.pp.pca(adata)
 sc.pl.pca(adata, color=['cell_type'])
 
 scv.pp.neighbors(adata, random_state=0)
+# scv.tl.umap(adata, random_state=0)
 
 # Skipping UMAP embedding since we've already done that
 # scv.tl.umap(X_magic, random_state=0)
@@ -194,10 +196,4 @@ for c in adata.obsm['py_pcha_S']:
 
 #%%
 # # Write out data
-adata.write_h5ad(f'../data/{genotype}_net_archetypes.h5ad')
-
-# adata.write_h5ad('../../data/combined/adata_02_filtered.h5ad')
-# adata.write_h5ad("../../data/combined/X_magic_02_filtered.h5ad")
-
-
-# %%
+adata.write_h5ad(f'../data/{genotype}_{dataset}.h5ad')
