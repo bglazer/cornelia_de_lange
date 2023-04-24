@@ -10,6 +10,7 @@ def plot_arrows(idxs, points, V, pV=None, sample_every=10, scatter=True, save_fi
     plt.figure(figsize=(15,15))
     if scatter:
         plt.scatter(points[:,0], points[:,1], s=s, c=c)
+        plt.colorbar()
     plt.xlim=xlimits
     plt.ylim=ylimits
     # black = true vectors
@@ -46,7 +47,9 @@ def velocity_vectors(T, X):
     n_obs = X.shape[0]
     for i in range(n_obs):
         indices = T[i].indices
-        dX = X[indices] - X[i, None]  # shape (n_neighbors, 2)
+        neighbors = X[indices]
+        point = X[i].reshape(1,-1)
+        dX = point - neighbors # shape (n_neighbors, n_features)
         dX /= l2_norm(dX)[:, None]
 
         # dX /= np.sqrt(dX.multiply(dX).sum(axis=1).A1)[:, None]
@@ -129,3 +132,15 @@ def umap_axes(axs):
         ax.set_yticks([])
         ax.set_xlabel('UMAP 1')
         ax.set_ylabel('UMAP 2')
+
+def get_plot_limits(X, buffer=0.1):
+    # Get the x and y extents of the embedding
+    x_min, x_max = np.min(X[:,0]), np.max(X[:,0])
+    y_min, y_max = np.min(X[:,1]), np.max(X[:,1])
+    x_diff = x_max - x_min
+    y_diff = y_max - y_min
+    x_buffer = x_diff * buffer
+    y_buffer = y_diff * buffer
+    x_limits = (x_min-x_buffer, x_max+x_buffer)
+    y_limits = (y_min-y_buffer, y_max+y_buffer)
+    return x_limits, y_limits

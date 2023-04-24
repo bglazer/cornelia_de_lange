@@ -4,8 +4,6 @@ import scanpy as sc
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from util import umap_axes
-# import magic
 
 #%%
 dataset = 'net'
@@ -20,8 +18,9 @@ print(f'Wildtype has {wt_n_archetypes} archetypes')
 print(f'Mutant has {mut_n_archetypes} archetypes')
 
 #%%
+n_pcs = 3
 n_archetypes = max(wt_n_archetypes, mut_n_archetypes)
-fig, axs = plt.subplots(2, n_archetypes+1, figsize=(10,5))
+fig, axs = plt.subplots(2*n_pcs, n_archetypes+1, figsize=(10,5*n_pcs))
 
 wt_umap = wt.obsm['X_umap']
 mut_umap = mut.obsm['X_umap']
@@ -34,42 +33,44 @@ color_codes = {c: i for i,c in enumerate(cell_types)}
 wt_cell_colors = [color_codes[c] for c in wt.obs['cell_type']]
 mut_cell_colors = [color_codes[c] for c in mut.obs['cell_type']]
 
-pc1 = 0
-pc2 = 1
+for j in range(0, n_pcs):
+    row = j*2
+    pc1 = row
+    pc2 = row+1
 
-axs[0][0].scatter(wt_pca[:,pc1], wt_pca[:,pc2], c=wt_cell_colors, cmap = 'tab20', s=.1)
-axs[1][0].scatter(mut_pca[:,pc1], mut_pca[:,pc2], c=mut_cell_colors, cmap = 'tab20', s=.1)
-axs[0][0].set_title('Wildtype')
-axs[1][0].set_title('Mutant')
-for i in [0,1]:
-    axs[i][0].set_xticks([])
-    axs[i][0].set_yticks([])
-    axs[i][0].set_xlabel('PC2')
-    axs[i][0].set_ylabel('PC3')
+    axs[row][0].scatter(wt_pca[:,pc1], wt_pca[:,pc2], c=wt_cell_colors, cmap = 'tab20', s=.1)
+    axs[row+1][0].scatter(mut_pca[:,pc1], mut_pca[:,pc2], c=mut_cell_colors, cmap = 'tab20', s=.1)
+    axs[row][0].set_title('Wildtype')
+    axs[row+1][0].set_title('Mutant')
+    for i in [0,1]:
+        axs[row+i][0].set_xticks([])
+        axs[row+i][0].set_yticks([])
+        axs[row+i][0].set_xlabel(f'PC{pc1}')
+        axs[row+i][0].set_ylabel(f'PC{pc2}')
+        
+    def plot_archetype_dist(data, ax, i):
+        archetype_score = data.obs[f'Arc_{i}_PCHA_Score']
+        pca = data.obsm['X_pca']
+        ax.scatter(pca[:,pc1], pca[:,pc2], c = archetype_score, cmap = 'RdBu', s=.2)
+        ax.set_title(f'Archetype {i}')
+        ax.set_xticks([])
+        ax.set_yticks([])
+        return ax
 
-def plot_archetype_dist(data, ax, i):
-    archetype_score = data.obs[f'Arc_{i}_PCHA_Score']
-    pca = data.obsm['X_pca']
-    ax.scatter(pca[:,pc1], pca[:,pc2], c = archetype_score, cmap = 'RdBu', s=.2)
-    ax.set_title(f'Archetype {i}')
-    ax.set_xticks([])
-    ax.set_yticks([])
-    return ax
+    # Color cells by their distance to each archetype
+    for i in range(0,n_archetypes):
+        col = i+1
+        if i < wt_n_archetypes:
+            axs[row][col] = plot_archetype_dist(wt, axs[row,col], i+1)
+        else:
+            # If there are more archetypes in the mutant, plot a blank subplot
+            axs[row][col].axis('off')
+        if i < mut_n_archetypes:
+            axs[row+1][col] = plot_archetype_dist(mut, axs[row+1,col], i+1)
+        else:
+            axs[row+1][col].axis('off')
 
-# Color cells by their distance to each archetype
-for i in range(0,n_archetypes):
-    col = i+1
-    if i < wt_n_archetypes:
-        axs[0,col] = plot_archetype_dist(wt, axs[0,col], i+1)
-    else:
-        # If there are more archetypes in the mutant, plot a blank subplot
-        axs[0][col].axis('off')
-    if i < mut_n_archetypes:
-        axs[1,col] = plot_archetype_dist(mut, axs[1,col], i+1)
-    else:
-        axs[1][col].axis('off')
-
-plt.tight_layout()
+    plt.tight_layout()
 
 
 # %%
@@ -159,6 +160,10 @@ ax.set_title('Generalists')
 ax.legend(ncol=1, bbox_to_anchor=(1, 1), loc='upper left', fontsize='small')
 plt.tight_layout()
 print(generalist_cell_type_df.T)
+
+#%%
+if 'cluster_sums' not in wt.obsm.keys():
+    exit()
 
 # %%
 # Make a heatmap of archetype  versus cluster sum

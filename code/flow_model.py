@@ -1,27 +1,57 @@
-from torch.nn import Linear, Sequential, ReLU, LeakyReLU
+from torch.nn import Linear, LeakyReLU
+from torch import FloatTensor
 import torch
 import networkx as nx
-from torchdyn.core import NeuralODE
 
 # Generic Dense Multi-Layer Perceptron (MLP), which is just a stack of linear layers with ReLU activations
 # input_dim: dimension of input
 # output_dim: dimension of output
 # hidden_dim: dimension of hidden layers
 # num_layers: number of hidden layers
-def MLP(input_dim, output_dim, hidden_dim, num_layers, input_bias=True):
-    layers = []
-    # First layer has same number of inputs and outputs for interpretability of the input weights
-    layers.append(Linear(input_dim, input_dim, bias=input_bias))
-    layers.append(LeakyReLU())
-    layers.append(Linear(input_dim, hidden_dim, bias=input_bias))
-    layers.append(LeakyReLU())
-    for i in range(num_layers - 2):
-        layers.append(Linear(hidden_dim, hidden_dim))
+class MLP(torch.nn.Module):
+    def __init__(self, input_dim, output_dim, hidden_dim, num_layers, input_bias=True):
+        super(MLP, self).__init__()
+        layers = []
+        # First layer has same number of inputs and outputs for interpretability of the input weights
+        layers.append(Linear(input_dim, hidden_dim, bias=input_bias))
         layers.append(LeakyReLU())
-        # TODO do we need batch norm here?
-    layers.append(Linear(hidden_dim, output_dim, bias=False))
-    layers.append(LeakyReLU())
-    return Sequential(*layers)
+        for i in range(num_layers - 1):
+            layers.append(Linear(hidden_dim, hidden_dim))
+            layers.append(LeakyReLU())
+            # TODO do we need batch norm here?
+        layers.append(Linear(hidden_dim, output_dim, bias=False))
+        layers.append(LeakyReLU())
+        # Register the layers as a module of the model
+        self.layers = torch.nn.ModuleList(layers)
+
+    def forward(self, x):
+        x = self.layers[0](x)
+
+        for layer in self.layers[1:]:
+            x = layer(x)
+
+        return x
+        
+# Subclass of the MLP that has a separate L1 multiplier for each node in the graph
+class L1_MLP(MLP):
+    def __init__(self, input_dim, output_dim, hidden_dim, num_layers):
+        super(L1_MLP, self).__init__(input_dim, output_dim, hidden_dim, num_layers)
+        # Create a Parameter of size (1, input_dim) that will be multiplied by the first layer
+        # to regularize the input weights
+        l1 = torch.randn(1, hidden_dim)
+        self.l1 = torch.nn.Parameter(l1, requires_grad=True)
+        l1_multiplier = self.l1.repeat(input_dim,1).T
+        self.l1_multiplier = torch.nn.Parameter(l1_multiplier, requires_grad=True)
+    
+    def forward(self, x):
+        # Multiply the first layer by the l1 multiplier
+        x = ((self.layers[0].weight * self.l1_multiplier) @ x.T).T
+        
+        for layer in self.layers[1:]:
+            x = layer(x)
+        
+        return x
+    
 
 # FlowModel is a neural ODE that takes in a state and outputs a delta
 class ConnectedFlowModel(torch.nn.Module):
@@ -35,20 +65,26 @@ class ConnectedFlowModel(torch.nn.Module):
         delta = self.model(state)
         return delta
     
-# FlowModel is a neural ODE that takes in a state and outputs a delta
 class L1FlowModel(torch.nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_dim, num_layers):
+    def __init__(self, input_dim, hidden_dim, num_layers):
         super(L1FlowModel, self).__init__()
-        self.model = MLP(input_dim, output_dim, hidden_dim, num_layers, input_bias=False)
+        self.models = []
+        # Create a separate MLP for each node in the graph
+        for i in range(input_dim):
+            node = L1_MLP(input_dim, 1, hidden_dim, num_layers)
+            self.models.append(node)
+        self.models = torch.nn.ModuleList(self.models)
 
     def forward(self, state):
-        # state is a tensor of shape (num_nodes, num_states)
-        delta = self.model(state)
+        delta = torch.zeros_like(state)
+        # For each node, run the corresponding MLP and insert the output into the delta tensor
+        for i,model in enumerate(self.models):
+            # state is a tensor of shape (num_nodes, num_states)
+            delta[:,i] = model(state).squeeze()
+            # Add the weights of the first layer to a list
         # Get the weights of the first layer
-        input_weights = self.model[0].weight
-        return delta, input_weights
-    
-# FlowModel is a neural ODE that takes in a state and outputs a delta
+        return delta
+
 class GraphFlowModel(torch.nn.Module):
     def __init__(self, num_layers, graph, data_idxs):
         super(GraphFlowModel, self).__init__()

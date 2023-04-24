@@ -4,7 +4,6 @@ import numpy as np
 import scanpy as sc
 from util import umap_axes
 from umap import UMAP
-import pickle
 
 #%%
 # Set the random seed for reproducibility
@@ -14,7 +13,7 @@ from random import seed
 seed(42)
 
 #%%
-dataset = 'full'
+dataset = 'net'
 wt = sc.read_h5ad(f'../data/wildtype_{dataset}.h5ad')
 mut = sc.read_h5ad(f'../data/mutant_{dataset}.h5ad')
 adata = wt.concatenate(mut, batch_key='genotype', batch_categories=['wildtype', 'mutant'])

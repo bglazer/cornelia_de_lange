@@ -20,19 +20,16 @@ seed(42)
 # adata = wt.concatenate(mut, batch_categories=['wildtype', 'mutant'])
 # adata.obs['batch'] = adata.obs['batch'].astype('category')
 
-wt = sc.read_h5ad('../data/wildtype_net_pseudotime.h5ad')
-mut = sc.read_h5ad('../data/mutant_net_pseudotime.h5ad')
+wt = sc.read_h5ad('../data/wildtype_net.h5ad')
+mut = sc.read_h5ad('../data/mutant_net.h5ad')
 network_data = wt.concatenate(mut, batch_categories=['wildtype', 'mutant'])
-
-#%%
-protein_id_to_name = pickle.load(open('../data/protein_id_to_name.pickle', 'rb'))
 
 # %%
 # Find the minimum distance between each wild type cell and mutant cell
 # Import the kd-tree data structure
 from scipy.spatial import KDTree
-kdtree = KDTree(wt.X)
-results = kdtree.query(mut.X)
+kdtree = KDTree(wt.X.toarray())
+results = kdtree.query(mut.X.toarray())
 
 # %%
 neighbor_dists, neighbor_idxs = results
@@ -47,7 +44,7 @@ wt_emb = wt.obsm['X_umap']
 
 plt.figure(figsize=(10,10))
 plt.scatter(mut_emb[:,0], mut_emb[:,1],
-            s=4, alpha=1, c=neighbor_dists/neighbor_dists.max(),
+            s=4, c=neighbor_dists/neighbor_dists.max(),
             cmap='Purples')
 # Remove the ticks and labels from the plot
 umap_axes(plt.gca())
@@ -70,87 +67,6 @@ axs[1].scatter(mut_emb[:,0], mut_emb[:,1],
             s=.5, c=mut_pseudotime)
 axs[1].set_title('Mutant')
 umap_axes(axs)
-
-#%%
-# Get the GO enrichment associated with each cluster
-cluster_enrichment = pickle.load(open('../data/cluster_enrichments_louvain.pickle', 'rb'))
-# Convert to a dictionary of clusters and terms with only the p<.01 terms
-cluster_terms = {}
-for cluster,term,pval,genes in cluster_enrichment:
-    if pval < .01:
-        if cluster not in cluster_terms: cluster_terms[cluster] = []
-        cluster_terms[cluster].append((term,pval,genes))
-cluster_assignments = pickle.load(open('../data/louvain_clusters.pickle', 'rb'))
-#%%
-# Plot the UMAP embedding of the filtered data colored by the total gene expression of each cluster
-# Normalize the expression of each cluster
-wt_expression_sum_nrm = wt.uns['cluster_sums']/(wt.uns['cluster_sums'].max(axis=0))
-mut_expression_sum_nrm = mut.uns['cluster_sums']/(mut.uns['cluster_sums'].max(axis=0))
-
-# Filter words that are relevant to development
-positive_words = ['develop', 'signal', 'matrix', 
-                'organization', 'proliferation', 'stem', 'pathway', 'epithel', 'mesenchym',
-                'morpho', 'mesoderm', 'endoderm', 'different', 'specification']
-
-# Plot the cluster sums for wildtype and mutant side by side
-n_clusters = wt.uns['cluster_sums'].shape[1]
-for i in range(n_clusters):
-    if i in cluster_terms:
-        print(i, flush=True)
-        fig,axs = plt.subplots(1,2, figsize=(11,11.5));
-        for genotype in ['wildtype', 'mutant']:
-            if genotype == 'wildtype':
-                ax = axs[0]
-                X = wt_emb
-                expression_sum_nrm = wt_expression_sum_nrm
-            else:
-                ax = axs[1]
-                X = mut_emb
-                expression_sum_nrm = mut_expression_sum_nrm
-            # Plot the UMAP embedding of the filtered data colored by
-            #  the total gene expression of each cluster
-            _=ax.scatter(X[:,0], X[:,1], 
-                       c=expression_sum_nrm[:,i], 
-                       s=10, alpha=.5, cmap='viridis', vmin=0, vmax=1)
-            # Title the plot
-            _=ax.set_title(f'Cluster {i} {genotype} expression')
-            # Add the enrichment terms to the side of the plot as a legend
-            legend = ['Terms:']
-            # Sort the terms by p-value
-            for cluster in cluster_terms:
-                cluster_terms[cluster] = sorted(cluster_terms[cluster], key=lambda x: x[1])
-
-            enriched_genes = set()
-            all_genes = ['\\'.join(protein_id_to_name[protein_id]) for protein_id in cluster_assignments[i]]
-            c = 0
-            for term,pval,genes in cluster_terms[i]:
-                if any([word in term.lower() for word in positive_words]) and pval<.05:
-                    legend.append(f'• {term} {pval:.2e}')
-                    enriched_genes.update(genes)
-                    c += 1
-                    if c > 10: break
-
-            legend.append('\n')
-            legend.append('Matched Genes:')
-            legend.append(', '.join(enriched_genes))
-            legend.append('\n')
-            legend.append('All Genes in Cluster:')
-            legend.append(', '.join(all_genes))
-            # Add blank space to the bottom of the plot to accomodate the text
-            # Remove the axis labels and ticks
-
-        umap_axes(axs)
-
-        _=plt.subplots_adjust(bottom=.4, left=.05)
-        # Add the terms to the plot as text in the middle of the figure below the axes
-        _=plt.figtext(.05, .35, '\n'.join(legend), 
-                      horizontalalignment='left',
-                      verticalalignment='top',
-                      fontsize=12, wrap=True)
-        # Save the plot
-        _=plt.savefig(f'../figures/gene_cluster_heatmaps/cluster_{i}_expression.png', dpi=300)
-        # Clear the plot
-        _=plt.clf();
 
 # %%
 # Plot pseudotime vs cluster expression for WT and mutant side by side

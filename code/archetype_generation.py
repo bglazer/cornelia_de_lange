@@ -12,32 +12,17 @@ from py_pcha import PCHA
 
 #%%
 genotype = 'mutant'
-dataset = 'full'
+dataset = 'net'
 adata = sc.read_h5ad(f'../data/{genotype}_{dataset}.h5ad')
 #%%
-# ## MAGIC
-# For stronger PCHA, we'll run MAGIC.
-
-# import pandas as pd
-# import matplotlib.pyplot as plt
-# magic_operator = magic.MAGIC(solver='approximate')
-# X_magic = magic_operator.fit_transform(adata)
-
-# Skipping magic imputation for now
-
-sc.pp.pca(adata)
-sc.pl.pca(adata, color=['cell_type'])
-
+# Perform PCA
+sc.pp.pca(adata, random_state=42)
+# Compute the neighborhood graph
 scv.pp.neighbors(adata, random_state=0)
-# scv.tl.umap(adata, random_state=0)
 
-# Skipping UMAP embedding since we've already done that
-# scv.tl.umap(X_magic, random_state=0)
-scv.pl.umap(adata,color=['cell_type'])
-
-sc.pl.pca_variance_ratio(adata)
 #%%
 pca_var = adata.uns['pca']['variance_ratio']
+sc.pl.pca_variance_ratio(adata)
 var_explained = .90
 tot_exp_var = 0
 n = 0
@@ -171,13 +156,6 @@ for arc in  adata.obsm['arc_distance'].columns:
 adata.obs['specialists_pca_diffdist'] = tmp.specialist
 #%%
 # ## Labeling by PCHA
-
-scv.pl.umap(adata, c = 'cell_type', components='1,2', show=False, figsize= (5,5), frameon=True, cmap = 'RdBu')
-
-for i in range(knee):
-    scv.pl.umap(adata, c = [S[i,:].T], components='1,2', show=False, figsize= (5,5), frameon=True, cmap = 'RdBu')
-    plt.title(f"Archetype {i}")
-    # plt.savefig(f'./figures/unsupervised_AA_magic/{i}_scPCHA_pca.pdf')
 #%%
 S_df = pd.DataFrame(S.T)
 
@@ -197,3 +175,5 @@ for c in adata.obsm['py_pcha_S']:
 #%%
 # # Write out data
 adata.write_h5ad(f'../data/{genotype}_{dataset}.h5ad')
+
+# %%

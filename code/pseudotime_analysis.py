@@ -8,52 +8,22 @@ import pickle
 import scipy
 
 #%%
-# Set the random seed for reproducibility
-import numpy as np
-np.random.seed(42)
-from random import seed
-seed(42)
-
-#%%
-network_data = sc.read_h5ad('../data/combined_net.h5ad')
+# network_data = sc.read_h5ad('../data/combined_net.h5ad')
 wt_data = sc.read_h5ad('../data/wildtype_net.h5ad')
 mut_data = sc.read_h5ad('../data/mutant_net.h5ad')
 
 #%%
-def cluster_sum(adata):
-    # Import the cluster assigments of each gene from the Tiana et al paper
-    cluster_assignments = pickle.load(open('../data/louvain_clusters.pickle', 'rb'))
-    # Convert the cluster assignments to indices of the genes in the filtered data
-    cluster_indexes = []
-    # Calculate the sum of the expression of each gene in each cluster
-    cluster_sums = np.zeros((adata.n_obs, len(cluster_assignments))) 
-
-    id_row = network_data.uns['id_row']
-
-    for i,gene_ids in enumerate(cluster_assignments):
-        # Get all the rows in the data that correspond to the current cluster
-        for gene_id in gene_ids:
-            if gene_id in id_row:
-                # todense() returns a matrix, A1 returns a 1d array
-                cluster_sums[:,i] += adata.X[:, id_row[gene_id]].todense().A1
-    return cluster_sums
-
-wt_cluster_sums = cluster_sum(wt_data)
-mut_cluster_sums = cluster_sum(mut_data)
-
-#%%
-# Add the cluster sums to the data sets
-wt_data.uns['cluster_sums'] = wt_cluster_sums
-mut_data.uns['cluster_sums'] = mut_cluster_sums
-
-#%%
-# Assign initial points to be cells with high expression of cluster 0
+# Assign initial points to be cells with high expression of 
+# a user defined cluster with the desired expression profile
 # Get the index of 99th percentile of cluster 0 expression
-wt_top_percentile = np.percentile(wt_cluster_sums[:,0], 99)
-mut_top_percentile = np.percentile(mut_cluster_sums[:,0], 99)
+initial_cluster = 2
+wt_cluster_sums = wt_data.obsm['cluster_sums']
+mut_cluster_sums = mut_data.obsm['cluster_sums']
+wt_top_percentile = np.percentile(wt_cluster_sums[:,initial_cluster], 99)
+mut_top_percentile = np.percentile(mut_cluster_sums[:,initial_cluster], 99)
 # Get the cells with expression above the 99th percentile
-wt_initial_points = np.where(wt_cluster_sums[:,0] > wt_top_percentile)[0]
-mut_initial_points = np.where(mut_cluster_sums[:,0] > mut_top_percentile)[0]
+wt_initial_points = np.where(wt_cluster_sums[:,initial_cluster] > wt_top_percentile)[0]
+mut_initial_points = np.where(mut_cluster_sums[:,initial_cluster] > mut_top_percentile)[0]
 wt_data.uns['initial_points_via'] = wt_initial_points
 mut_data.uns['initial_points_via'] = mut_initial_points
 # Add the initial points to the data sets
@@ -119,6 +89,7 @@ for genotype in ['wildtype', 'mutant']:
                         cmap='rainbow', facecolor='white', size_scatter=15, alpha_scatter=0.2,
                         extra_title_text='externally computed edgebundle', headwidth_bundle=0.4)
     plt.savefig(f'../figures/pseudotime/{genotype}_pseudotime_edgebundle.png', dpi=300)
+
 
 #%%
 # Add the pseudotime to the wildtype and mutant datasets

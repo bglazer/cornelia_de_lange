@@ -3,47 +3,54 @@ import numpy as np
 import scanpy as sc
 from util import umap_axes
 import scvelo as scv
+from matplotlib import pyplot as plt
+
+#%%
+# Load the wildtype and mutant data
+wt = sc.read('../data/wildtype_net_pseudotime.h5ad')
+mut = sc.read('../data/mutant_net_pseudotime.h5ad')
 
 # %%
 # Load the RNA velocity data
-wt_vel = sc.read('../data/wildtype_velocity_network.h5ad')
-mut_vel = sc.read('../data/mutant_velocity_network.h5ad')
+wt_vel_orig = sc.read('../data/wildtype_velocity_network.h5ad')
+mut_vel_orig = sc.read('../data/mutant_velocity_network.h5ad')
 # Filter to only the genes that are in the network data
-wt_vel = wt_vel[:, wt_vel.var_names.isin(wt.var_names)]
-mut_vel = mut_vel[:, mut_vel.var_names.isin(mut.var_names)]
+wt_vel_orig_net = wt_vel_orig[:, wt_vel_orig.var_names.isin(wt.var_names)]
+mut_vel_orig_net = mut_vel_orig[:, mut_vel_orig.var_names.isin(mut.var_names)]
 
 # %%
 # Add the precomputed UMAP to the velocity data
-wt_vel.obsm['X_umap'] = wt_emb
-mut_vel.obsm['X_umap'] = mut_emb
-
+wt_emb = wt.obsm['X_umap']
+mut_emb = mut.obsm['X_umap']
+wt_vel_orig_net.obsm['X_umap'] = wt_emb
+mut_vel_orig_net.obsm['X_umap'] = mut_emb
 
 
 #%%
 # Plot the velocity embedding from the original, unfiltered data
-scv.pl.velocity_embedding_stream(wt_vel)
-scv.pl.velocity_embedding_stream(mut_vel)
+scv.pl.velocity_embedding_stream(wt_vel_orig_net)
+scv.pl.velocity_embedding_stream(mut_vel_orig_net)
 
 #%%
 # Recompute the transition matrix using only the cells that are in the network
-scv.tl.velocity(wt_vel)
-scv.tl.velocity(mut_vel)
-scv.tl.transition_matrix(wt_vel)
-scv.tl.transition_matrix(mut_vel)
-scv.tl.velocity_pseudotime(wt_vel)
-scv.tl.velocity_pseudotime(mut_vel)
+scv.tl.velocity(wt_vel_orig_net)
+scv.tl.velocity(mut_vel_orig_net)
+scv.tl.transition_matrix(wt_vel_orig_net)
+scv.tl.transition_matrix(mut_vel_orig_net)
+scv.tl.velocity_pseudotime(wt_vel_orig_net)
+scv.tl.velocity_pseudotime(mut_vel_orig_net)
 # Replot the velocity embedding stream
-scv.pl.velocity_embedding_stream(wt_vel)
-scv.pl.velocity_embedding_stream(mut_vel)
+scv.pl.velocity_embedding_stream(wt_vel_orig_net)
+scv.pl.velocity_embedding_stream(mut_vel_orig_net)
 
 # %%
 # Plot the RNA-velocity pseudotime
 fig, axs = plt.subplots(1,2, figsize=(10,5))
 axs[0].scatter(wt_emb[:,0], wt_emb[:,1], 
-            c=wt_vel.obs['velocity_pseudotime'], cmap='gnuplot',
+            c=wt_vel_orig_net.obs['velocity_pseudotime'], cmap='gnuplot',
             s=.5, alpha=.5)
 axs[1].scatter(mut_emb[:,0], mut_emb[:,1], 
-            c=mut_vel.obs['velocity_pseudotime'], cmap='gnuplot',
+            c=mut_vel_orig_net.obs['velocity_pseudotime'], cmap='gnuplot',
             s=.5, alpha=.5)
 umap_axes(axs)
 # Add a colorbar
@@ -57,8 +64,8 @@ scv.pl.scatter(mut_vel, color='velocity_pseudotime', cmap='gnuplot')
 # Compute the cosine similarity between the velocity pseudotime and 
 # the VIA pseudotime velocity vectors
 from util import velocity_vectors
-wt_X = wt_via.data
-wt_T = wt_via.sc_transition_matrix(smooth_transition=1)
+wt_X = wt.X
+wt_T = wt.obsm['transition_matrix']
 
 wt_V_via = velocity_vectors(wt_T, wt_X)
 wt_V_rna = wt_vel.layers['velocity']
@@ -74,11 +81,13 @@ mut_T = mut_via.sc_transition_matrix(smooth_transition=1)
 
 mut_V_via = velocity_vectors(mut_T, mut_X)
 mut_V_rna = mut_vel.layers['velocity']
-mut_V_nrm_via = mut_V_via / np.linalg.norm(mut_V_via, axis=1)[:,None]
+mut_V_nrm_via = mut_V_via / np.lina lg.norm(mut_V_via, axis=1)[:,None]
 mut_V_nrm_rna = mut_V_rna / np.linalg.norm(mut_V_rna, axis=1)[:,None]
 # Cosine similarity
 mut_cos_sim = np.sum(mut_V_nrm_via * mut_V_nrm_rna, axis=1)
 mut_eucl_dist = np.linalg.norm(mut_V_via - mut_V_rna, axis=1)
+
+# %%
 
 # %%
 wt_cos_sim_nrm = (wt_cos_sim + 1)/2
