@@ -1,6 +1,8 @@
 models/*
 figures/*
 data/*
+logs/*
+output/*
 data/metadata-mesoderm-wildtype.csv
 data/raw-counts-mesoderm-wildtype.csv
 output/signed/cor/TOMplot.pdf
