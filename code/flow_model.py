@@ -1,7 +1,8 @@
-from torch.nn import Linear, LeakyReLU
+from torch.nn import Linear, LeakyReLU, ReLU
 from torch import FloatTensor
 import torch
 import networkx as nx
+from networkx.generators import ego_graph
 
 # Generic Dense Multi-Layer Perceptron (MLP), which is just a stack of linear layers with ReLU activations
 # input_dim: dimension of input
@@ -13,45 +14,21 @@ class MLP(torch.nn.Module):
         super(MLP, self).__init__()
         layers = []
         # First layer has same number of inputs and outputs for interpretability of the input weights
-        layers.append(Linear(input_dim, hidden_dim, bias=input_bias))
-        layers.append(LeakyReLU())
+        layers.append(Linear(input_dim, hidden_dim, bias=False))
+        layers.append(ReLU())
         for i in range(num_layers - 1):
-            layers.append(Linear(hidden_dim, hidden_dim))
-            layers.append(LeakyReLU())
+            layers.append(Linear(hidden_dim, hidden_dim, bias=False))
+            layers.append(ReLU())
             # TODO do we need batch norm here?
         layers.append(Linear(hidden_dim, output_dim, bias=False))
-        layers.append(LeakyReLU())
+        # layers.append(LeakyReLU())
         # Register the layers as a module of the model
         self.layers = torch.nn.ModuleList(layers)
 
     def forward(self, x):
-        x = self.layers[0](x)
-
-        for layer in self.layers[1:]:
+        for layer in self.layers:
             x = layer(x)
-
         return x
-        
-# Subclass of the MLP that has a separate L1 multiplier for each node in the graph
-class L1_MLP(MLP):
-    def __init__(self, input_dim, output_dim, hidden_dim, num_layers):
-        super(L1_MLP, self).__init__(input_dim, output_dim, hidden_dim, num_layers)
-        # Create a Parameter of size (1, input_dim) that will be multiplied by the first layer
-        # to regularize the input weights
-        l1 = torch.randn(1, hidden_dim)
-        self.l1 = torch.nn.Parameter(l1, requires_grad=True)
-        l1_multiplier = self.l1.repeat(input_dim,1).T
-        self.l1_multiplier = torch.nn.Parameter(l1_multiplier, requires_grad=True)
-    
-    def forward(self, x):
-        # Multiply the first layer by the l1 multiplier
-        x = ((self.layers[0].weight * self.l1_multiplier) @ x.T).T
-        
-        for layer in self.layers[1:]:
-            x = layer(x)
-        
-        return x
-    
 
 # FlowModel is a neural ODE that takes in a state and outputs a delta
 class ConnectedFlowModel(torch.nn.Module):
@@ -71,7 +48,7 @@ class L1FlowModel(torch.nn.Module):
         self.models = []
         # Create a separate MLP for each node in the graph
         for i in range(input_dim):
-            node = L1_MLP(input_dim, 1, hidden_dim, num_layers)
+            node = MLP(input_dim, 1, hidden_dim, num_layers, input_bias=False)
             self.models.append(node)
         self.models = torch.nn.ModuleList(self.models)
 
@@ -86,7 +63,7 @@ class L1FlowModel(torch.nn.Module):
         return delta
 
 class GraphFlowModel(torch.nn.Module):
-    def __init__(self, num_layers, graph, data_idxs):
+    def __init__(self, num_layers, graph, data_idxs, hops=1):
         super(GraphFlowModel, self).__init__()
         # Make an MLP for each node in the networkx graph
         # with one input to the MLP for each incoming edge and a 
@@ -124,14 +101,12 @@ class GraphFlowModel(torch.nn.Module):
         self.adj_list = {}
         non_data_nodes = []
         for node in self.graph.nodes():
-            adj = []
-            for edge in self.graph.in_edges(node):
-                src = edge[0]
-                if src in self.data_idxs:
-                    adj.append(data_idxs[src])
+            self.adj_list[node] = []
+            for neighbor in ego_graph(self.graph, node, radius=hops):
+                if neighbor in self.data_idxs:
+                    self.adj_list[node].append(data_idxs[neighbor])
                 else:
-                    raise Exception(f'Error: node {src} is in the graph but it is not in the input data')
-            self.adj_list[node] = adj
+                    raise Exception(f'Error: node {neighbor} is in the graph but it is not in the input data')
         
         for node in self.adj_list:
             input_dim = len(graph.in_edges(node))
@@ -143,14 +118,15 @@ class GraphFlowModel(torch.nn.Module):
 
         self.models = torch.nn.ModuleDict(self.models)
         
-    def forward(self, state):
+    def forward(self, state, node):
         # Apply each model to the portion of the state vector that
         #  corresponds to the inputs to the node in the graph
-        output = torch.zeros(state.shape, device=state.device)
-        for node, model in self.models.items():
-            inputs = state[:,self.adj_list[node]]
-            delta = model(inputs)
-            output[:,self.data_idxs[node]] = delta[:,0]
+        breakpoint()
+        output = torch.zeros(state.shape[0], device=state.device)
+
+        inputs = state[:,self.adj_list[node]]
+        delta = model(inputs)
+        output[:,self.data_idxs[node]] = delta[:,0]
 
         return output
 

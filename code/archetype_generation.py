@@ -11,7 +11,7 @@ from py_pcha import PCHA
 # import magic
 
 #%%
-genotype = 'mutant'
+genotype = 'wildtype'
 dataset = 'net'
 adata = sc.read_h5ad(f'../data/{genotype}_{dataset}.h5ad')
 #%%

@@ -6,33 +6,58 @@ import numpy as np
 import matplotlib.pyplot as plt
 from util import tonp, velocity_vectors 
 from sklearn.cluster import AgglomerativeClustering
-from torch.nn.utils.prune import l1_unstructured
+from torch.nn.utils.prune import l1_unstructured, ln_structured
 from copy import deepcopy
+import scanpy as sc
 from threshold_prune import loss_threshold_l1_prune
+from sklearn.decomposition import PCA
+from util import embed_velocity, get_plot_limits
 
 #%%
-via = pickle.load(open(f'../data/mutant_pseudotime.pickle', 'rb'))
+genotype='wildtype'
+dataset = 'net' 
+adata = sc.read_h5ad(f'../data/{genotype}_{dataset}.h5ad')
 
 #%%
-num_nodes = via.data.shape[1]
-hidden_dim = num_nodes*2
+pcs = adata.varm['PCs']
+pca = PCA()
+pca.components_ = pcs.T
+pca.mean_ = adata.X.mean(axis=0)
+
+#%%
+# Get the transition matrix from the VIA graph
+X = adata.X.toarray()
+T = adata.obsm['transition_matrix']
+
+V = velocity_vectors(T, X)
+
+#%%
+def embed(X, pcs=[0,1]):
+    return pca.transform(X)[:,pcs]
+
+#%%
+embedding = embed(X)
+#%%
+V_emb = embed_velocity(X, V, embed)
+#%%
+num_nodes = adata.shape[1]
+hidden_dim = 10
 num_layers = 3
 
 device = 'cuda:0'
 model = L1FlowModel(input_dim=num_nodes, 
-                            output_dim=num_nodes, 
-                            hidden_dim=hidden_dim, 
-                            num_layers=num_layers).to(device)
-tmstp = '20230330_172620'
+                    hidden_dim=hidden_dim, 
+                    num_layers=num_layers).to(device)
+tmstp = '20230425_112405'
 model.load_state_dict(torch.load(f'../models/l1_flow_model_wildtype_{tmstp}.torch'))
-
 
 # %%
 # Get the input weights of the trained model
-data = via.data
+data = adata.X.toarray()
 idxs = torch.arange(data.shape[0])
 starts = torch.tensor(data[idxs], device=device)
-pV, original_weights = model(starts)
+pV = model(starts)
+original_weights = torch.cat([m.layers[0].weight for m in model.models])
 original_weights = tonp(original_weights)
 # Plot a histogram of the input weights
 plt.hist(np.log(original_weights.flatten()), bins=100);
@@ -42,17 +67,6 @@ plt.hist(np.log(original_weights.flatten()), bins=100);
 pct = np.percentile(np.abs(original_weights), 90)
 # Number of input weights that are non-zero per node
 plt.hist(np.sum(np.abs(original_weights) > pct, axis=0));
-# %%
-# Hierarchical clustering of the input weights
-cluster = AgglomerativeClustering(n_clusters=10, affinity='euclidean', linkage='ward')
-xlabels = cluster.fit_predict(original_weights)
-ylabels = cluster.fit_predict(original_weights.T)
-# Sort the data by both the x and y labels
-xidx = np.argsort(xlabels)
-yidx = np.argsort(ylabels)
-# Plot the input weights, ordered by the clustering
-plt.imshow(original_weights[xidx,:][:,yidx])
-plt.grid(False)
 
 #%%
 pruned_weights = deepcopy(model.model[0])

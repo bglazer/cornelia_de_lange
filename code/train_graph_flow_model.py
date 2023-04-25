@@ -1,208 +1,183 @@
 #%%
+# %load_ext autoreload
+# %autoreload 2
+#%%
 import torch
 from matplotlib import pyplot as plt
-import pickle
 import numpy as np
-from pyVIA.core import l2_norm
-from flow_model import FlowModel
-from util import tonp, plot_arrows, velocity_vectors, embed_velocity
+import scanpy as sc
+from flow_model import GraphFlowModel
+from util import tonp, plot_arrows, velocity_vectors, embed_velocity, get_plot_limits, is_notebook
+from sklearn.decomposition import PCA
+from joblib import Parallel, delayed
+from datetime import datetime
+import os
+import sys
+from itertools import product
+import pickle
+
+#%%
+if is_notebook():
+    now = datetime.now()
+    tmstp = now.strftime("%Y%m%d_%H%M%S")
+else:
+    if len(sys.argv) < 2:
+        print('Usage: python train_l1_flow_model.py <timestamp>')
+        sys.exit(1)
+    tmstp = sys.argv[1]
 
 #%%
 genotype='wildtype'
-
+dataset = 'net'
 #%% 
-# Load the VIA object from pickle
-via = pickle.load(open(f'../data/{genotype}_pseudotime.pickle', 'rb'))
+adata = sc.read_h5ad(f'../data/{genotype}_{dataset}.h5ad')
 
 #%%
-# Load the umap embedding
-# embedding = pickle.load(open(f'../data/umap_embedding_{genotype}.pickle', 'rb'))
-# Load the umap object
-umap_ = pickle.load(open(f'../data/umap_{genotype}.pickle', 'rb'))
-# Load the pca object
-pca_ = pickle.load(open(f'../data/pca_{genotype}.pickle', 'rb'))
-# Load the graph object
-graph = pickle.load(open(f'../data/filtered_graph.pickle', 'rb'))
+pcs = adata.varm['PCs']
+pca = PCA()
+pca.components_ = pcs.T
+pca.mean_ = adata.X.mean(axis=0)
 
 #%%
 # Get the transition matrix from the VIA graph
-X = via.data
-T = via.sc_transition_matrix(smooth_transition=1)
+X = adata.X.toarray()
+T = adata.obsm['transition_matrix']
+
 V = velocity_vectors(T, X)
 
-# bad hack that I have to do because VIA doesn't like working with low dimensional data
-# Setting nan values to zero. Nan values occur when a point has no neighbors
-V[np.isnan(V).sum(axis=1) > 0] = 0
+#%%
+def embed(X, pcs=[0,1]):
+    return pca.transform(X)[:,pcs]
 
 #%%
-def tonp(x):
-    return x.detach().cpu().numpy()
+embedding = embed(X)
+#%%
+V_emb = embed_velocity(X, V, embed)
 
 #%%
-def plot_arrows(idxs, points, V, pV=None, sample_every=10, scatter=True, save_file=None, c=None, s=3, aw=0.001, xlimits=None, ylimits=None):
-    # Plot the vectors from the sampled points to the transition points
-    plt.figure(figsize=(15,15))
-    if scatter:
-        plt.scatter(points[:,0], points[:,1], s=s, c=c)
-    plt.xlim=xlimits
-    plt.ylim=ylimits
-    # black = true vectors
-    # Green = predicted vectors
-    sample = points[idxs]
-    
-    for i in range(0, len(idxs), sample_every):
-        plt.arrow(sample[i,0], sample[i,1], V[i,0], V[i,1], color='black', alpha=1, width=aw)
-        if pV is not None:
-            plt.arrow(sample[i,0], sample[i,1], pV[i,0], pV[i,1], color='g', alpha=1, width=aw)
-
-    # Remove the ticks and tick labels
-    plt.xticks([])
-    plt.yticks([])
-    plt.xlabel('PCA 1')
-    plt.ylabel('PCA 2')
-
-    if save_file is not None:
-        plt.savefig(save_file)
-
-#%%
-def embed(X):
-    return pca_.transform(X)[:,1:3]
-
-#%%
-embedding = embed(via.data)
-V_emb = embed_velocity(via.data, V, embed)
-
-#%%
-# Get the x and y extents of the embedding
-x_min, x_max = np.min(embedding[:,0]), np.max(embedding[:,0])
-y_min, y_max = np.min(embedding[:,1]), np.max(embedding[:,1])
-x_diff = x_max - x_min
-y_diff = y_max - y_min
-x_buffer = x_diff * 0.1
-y_buffer = y_diff * 0.1
-x_limits = (x_min-x_buffer, x_max+x_buffer)
-y_limits = (y_min-y_buffer, y_max+y_buffer)
-
+x_limits, y_limits = get_plot_limits(embedding)
 #%%
 # plot_arrows(idxs=range(len(embedding)), 
-#             points=embedding, 
+#             points=np.asarray(embedding), 
 #             V=V_emb, 
-#             sample_every=2, 
-#             c=via.single_cell_pt_markov,
+#             sample_every=10, 
+#             c=adata.obs['pseudotime'],
 #             xlimits=x_limits,
-#             ylimits=y_limits)
+#             ylimits=y_limits,
+#             aw=0.01,)
 
 #%%
-num_layers = 3
-
-#%%
-network_data = pickle.load(open(f'../data/network_data_{genotype}.pickle', 'rb'))
-protein_id_to_name = pickle.load(open('../data/protein_id_to_name.pickle', 'rb'))
-protein_name_to_ids = pickle.load(open('../data/protein_names.pickle', 'rb'))
-
-nodes = list(network_data.var_names)
-indices_of_nodes_in_graph = []
-node_idxs = {}
-# Get the indexes of the data rows that correspond to nodes in the Nanog regulatory network
-for i,name in enumerate(nodes):
-    name = name.upper()
-    # Find the ensembl id of the gene
-    if name in protein_name_to_ids:
-        # There may be multiple ensembl ids for a gene name
-        for id in protein_name_to_ids[name]:
-            # If the ensembl id is in the graph, then the gene is in the network
-            if id in graph.nodes:
-                # Record the data index of the gene in the network data
-                node_idxs[id] = i
-
-#%%
-device = 'cuda:0'
-model = FlowModel(num_layers=num_layers, 
-                  graph=graph, 
-                  data_idxs=node_idxs).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-loss_fn = torch.nn.MSELoss(reduction='mean')
-
-data = torch.tensor(via.data).to(torch.float32).to(device)
-Vgpu = torch.tensor(V).to(torch.float32).to(device)
+num_gpus = 4
+data = [torch.tensor(X).to(torch.float32).to(f'cuda:{i}') for i in range(num_gpus)]
+Vgpu = [torch.tensor(V).to(torch.float32).to(f'cuda:{i}') for i in range(num_gpus)]
 #%%
 mse = torch.nn.MSELoss(reduction='mean')
 
-n_epoch = 10000
 n_points = 1000
 n_traces = 50
 n_samples = 10
 
-losses = {node : [] for node in graph.nodes}
-total_losses = []
+loss_fn = torch.nn.MSELoss(reduction='mean')
 
 #%%
-for i in range(n_epoch+1):
-    optimizer.zero_grad()
-    # Run the model from N randomly selected data points
-    # Random sampling
-    idxs = torch.randint(0, data.shape[0], (n_points,))
-    
-    # TODO Note we're sampling all the points here, but we should be sampling a subset
-    # Data is small enough that we can take the full set
-    # idxs = torch.arange(data.shape[0])
-    starts = data[idxs]
-    pV = model(starts)
-    velocity = Vgpu[idxs]
-    # Calculate the loss for each node in the network
-    for node in graph.nodes:
-        # Get the index of the node in the network data
-        node_idx = node_idxs[node]
-        # Get the predicted velocity for the node
-        node_pV = pV[:,node_idx]
-        # Get the true velocity vector for the node
-        node_V = velocity[:,node_idx]
+os.mkdir(f'../output/{tmstp}')
+os.mkdir(f'../output/{tmstp}/logs')
+os.mkdir(f'../output/{tmstp}/params')
+os.mkdir(f'../output/{tmstp}/models')
+
+#%%
+n_epoch = 10_000
+num_nodes = X.shape[1]
+hidden_dim = 10
+num_layers = 3
+
+device = 'cuda:0'
+model = GraphFlowModel(input_dim=num_nodes, 
+                       hidden_dim=hidden_dim, 
+                       num_layers=num_layers)
+for node_model in model.models:
+    torch.nn.init.uniform_(node_model.layers[0].weight, 0, 1)
+
+#%%
+def train(model_idx, gpu, param_idx):
+    lmbda = dict(params[param_idx])['lmbda']
+    logfile = open(f'../output/{tmstp}/logs/l1_flow_model_{model_idx}_{genotype}_{param_idx}.log', 'w')
+    node_model = model.models[model_idx].to(f'cuda:{gpu}')
+    optimizer = torch.optim.Adam(node_model.parameters(), lr=1e-3)
+
+    for epoch in range(n_epoch+1):
+        optimizer.zero_grad()
+        # Run the model from N randomly selected data points
+        # Random sampling
+        idxs = torch.randint(0, data[gpu].shape[0], (n_points,))
+        starts = data[gpu][idxs]
+        pV = node_model(starts)
+        velocity = Vgpu[gpu][idxs, model_idx][:,None]
         # Compute the loss between the predicted and true velocity vectors
-        node_loss = mse(node_pV, node_V)
-        # Add the loss to the total loss
-        losses[node].append(node_loss.item())
-    
-    # Compute the loss between the predicted and true velocity vectors
-    loss = mse(pV, velocity)
-    loss.backward()
-    optimizer.step()
-    print(i,' '.join([f'{x.item():.9f}' for x in [loss]]), flush=True)
-    total_losses.append(loss.item())
+        loss = mse(pV, velocity)
+        # Compute the L1 penalty on the input weights
+        gt0 = node_model.layers[0].weight > 0
+        n_active_inputs = ((model.models[0].layers[0].weight > 0).sum(axis=0) > 0).sum()
+        if gt0.sum() > 0:
+            l1_penalty = torch.mean(torch.abs(node_model.layers[0].weight[gt0]))
+            # Add the loss and the penalty
+            total_loss = loss + lmbda*l1_penalty
+        else:
+            total_loss = loss
+            l1_penalty = 0
+        total_loss.backward()
+        optimizer.step()
 
-    if i%100 == 0:
-        plt.plot(total_losses)
-        plt.savefig(f'../figures/loss_curve/loss_{genotype}.png')
+        # Every N steps plot the predicted and true vectors
+        if epoch % 10 == 0:
+            msg = f'{model_idx} {epoch} {total_loss:.4e} {loss:.4e} {l1_penalty:.4f} {gt0.sum():.4f} {n_active_inputs}'
+            # print(msg)
+            logfile.write(msg + '\n')
 
-    # Every N steps plot the predicted and true vectors
-    if i % 200 == 0:
-        idxs = torch.arange(data.shape[0])
-        starts = data[idxs]
-        pV = model(starts)
-        dpv = embed_velocity(X=tonp(starts),
-                             velocity=tonp(pV),
-                             embed_fn=embed)
-        plot_arrows(idxs=idxs,
-                    points=embedding, 
-                    V=V_emb*10,
-                    pV=dpv*10,
-                    sample_every=5,
-                    scatter=False,
-                    save_file=f'../figures/embedding/vector_field_{genotype}_{i}.png',
-                    c=via.single_cell_pt_markov,
-                    s=.5,
-                    xlimits=x_limits,
-                    ylimits=y_limits)
-    # if i%1000 == 0:
-    #     plot_traces(model, trace_starts, i, n_traces=n_traces)
-    #     torch.save(model.state_dict(), 'simple_model.torch')
+    return node_model
 
-    plt.close()
+#%%
+# Hyperparameter tuning
+gpu_parallel = 5
+lmbda_space = [('lmbda',x) for x in np.linspace(1e-3, 1e-2, 10)]
+# hidden_dim_space = [('hidden_dim',x) for x in np.linspace(10, 100, 10)]
+trained_models = {}
+outfile = open(f'../output/train_l1_flow_model.out', 'w')
+params = list(product(lmbda_space))
+pickle.dump(params, open(f'../output/{tmstp}/params/l1_flow_model_{genotype}.pickle', 'wb'))
+for param_idx in range(len(params)):
+    print(params, flush=True)
+    parallel = Parallel(n_jobs=num_gpus*gpu_parallel)
+    trained_models[param_idx] = parallel(delayed(train)(i, i%num_gpus, param_idx) for i in range(num_nodes))
+#%%
+# Save the dictionary of trained models
+state_dicts = {}
+for model in trained_models:
+    state_dicts[model] = torch.nn.ModuleList(trained_models[model]).state_dict()
 
-#%% 
-# Save the trained model
-# Get the current datetime to use in the model name
-from datetime import datetime
-now = datetime.now()
-timestamp = now.strftime("%Y%m%d_%H%M%S")
-torch.save(model.state_dict(), f'../models/flow_model_{genotype}_{timestamp}.torch')
-# %%
+pickle.dump(state_dicts, open(f'../output/{tmstp}/models/l1_flow_model_{genotype}.pickle', 'wb'))
+
+#%%
+# model.models = torch.nn.ModuleList(trained_models)
+
+#%%
+# gpu = 0
+# idxs = torch.arange(data[gpu].shape[0])
+# starts = data[gpu][idxs]
+# model = model.to(f'cuda:{gpu}')
+# pV = model(starts)
+# dpv = embed_velocity(X=tonp(starts),
+#                     velocity=tonp(pV),
+#                     embed_fn=embed)
+# plot_arrows(idxs=idxs,
+#             points=embedding, 
+#             V=V_emb,
+#             pV=dpv,
+#             sample_every=5,
+#             scatter=False,
+#             save_file=f'../figures/embedding/l1_vector_field_{genotype}_{tmstp}.png',
+#             c=adata.obs['pseudotime'],
+#             s=1.5,
+#             xlimits=x_limits,
+#             ylimits=y_limits)
+
