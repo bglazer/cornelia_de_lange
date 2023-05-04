@@ -27,6 +27,14 @@ else:
 #%%
 genotype='wildtype'
 dataset = 'net'
+
+#%% 
+# Set seeds for reproducibility
+np.random.seed(0)
+torch.manual_seed(0)
+import random
+random.seed(0)
+
 #%% 
 print(tmstp)
 print('Setting up')

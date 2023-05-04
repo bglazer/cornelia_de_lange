@@ -13,14 +13,13 @@ class MLP(torch.nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim, num_layers, input_bias=True):
         super(MLP, self).__init__()
         layers = []
-        # First layer has same number of inputs and outputs for interpretability of the input weights
-        layers.append(Linear(input_dim, hidden_dim, bias=False))
+        layers.append(Linear(input_dim, hidden_dim, bias=input_bias))
         layers.append(ReLU())
         for i in range(num_layers - 1):
-            layers.append(Linear(hidden_dim, hidden_dim, bias=False))
+            layers.append(Linear(hidden_dim, hidden_dim, bias=True))
             layers.append(ReLU())
             # TODO do we need batch norm here?
-        layers.append(Linear(hidden_dim, output_dim, bias=False))
+        layers.append(Linear(hidden_dim, output_dim, bias=True))
         # layers.append(LeakyReLU())
         # Register the layers as a module of the model
         self.layers = torch.nn.ModuleList(layers)

@@ -9,12 +9,20 @@ import pickle
 import torch
 import scanpy as sc
 from torch.optim import Adam
- 
+import numpy as np
+
+#%% 
+# Set seeds for reproducibility
+np.random.seed(0)
+torch.manual_seed(0)
+import random
+random.seed(0)
+
 #%%
 genotype = 'wildtype'
 graph = pickle.load(open(f'../data/filtered_graph.pickle', 'rb'))
 adata = sc.read_h5ad('../data/wildtype_net.h5ad')
- 
+
  #%%
 nodes = list(adata.var_names)
 #%%
