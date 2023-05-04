@@ -158,3 +158,22 @@ def is_notebook() -> bool:
     except NameError:
         return False      # Probably standard Python interpreter
 
+def find_knee(x,y):
+    farthestk = 0
+    kmax = len(y)-1
+    for i in range(len(y)):
+        #find distance of point p3 from line between p1 and p2
+        p1=np.array([x[0],y[0]])
+        p2=np.array([x[kmax],y[kmax]])
+        p3=np.array([x[i],y[i]])
+        # k is the distance from the line between p1 and p2
+        k = (np.cross(p2-p1,p3-p1)/np.linalg.norm(p2-p1))
+
+        #knee is farthest away from line between p1 and p2
+        if k > farthestk: 
+            farthestk = k
+            knee = i
+    if knee is None:
+        raise Exception("No knee found")
+    
+    return knee, farthestk

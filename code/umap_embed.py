@@ -38,6 +38,10 @@ adata.obsm['X_umap'] = umap_embedding
 wt.obsm['X_umap'] = umap_embedding[adata.obs['genotype']=='wildtype',:]
 mut.obsm['X_umap'] = umap_embedding[adata.obs['genotype']=='mutant',:]
 
+#%%
+# PCA embed the combined data
+sc.pp.pca(adata, n_comps=50, random_state=42)
+
 # %%
 # Save the combined dataset
 # adata.write_h5ad(f'../data/combined_{dataset}.h5ad')

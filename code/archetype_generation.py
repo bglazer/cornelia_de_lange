@@ -16,7 +16,7 @@ dataset = 'net'
 adata = sc.read_h5ad(f'../data/{genotype}_{dataset}.h5ad')
 #%%
 # Perform PCA
-sc.pp.pca(adata, random_state=42)
+# sc.pp.pca(adata, random_state=42)
 # Compute the neighborhood graph
 scv.pp.neighbors(adata, random_state=0)
 
@@ -172,6 +172,7 @@ adata.obsm['py_pcha_S'] = S_df
 for c in adata.obsm['py_pcha_S']:
     adata.obs[f"{c}_PCHA_Score"] = adata.obsm['py_pcha_S'][c]
 
+adata.uns['archetype_vertices'] = XC
 #%%
 # # Write out data
 adata.write_h5ad(f'../data/{genotype}_{dataset}.h5ad')

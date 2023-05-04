@@ -1,9 +1,16 @@
 # Archetype analysis
 #%%
+# Jupyter magic to reload modules
+# Ignore pylance warnings
+%load_ext autoreload
+%autoreload 2
+#%%
 import scanpy as sc
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import polytope
+
 
 #%%
 dataset = 'net'
@@ -217,4 +224,49 @@ axs[1].set_xlabel('Cluster', fontsize=18)
 axs[0].set_ylabel('Archetype', fontsize=18)
 # plt.colorbar()
 plt.tight_layout()
+# %%
+# Find wildtype cells that are entirely within the polytope formed by wildtype archetypes
+# This is a sanity check to make sure that the wildtype archetypes are well defined
+wt_vertices = wt.uns['archetype_vertices'][:wt_n_archetypes-1]
+archetype_dim = wt_vertices.shape[0]
+mut_pca = mut.obsm['X_pca'][:, 0:wt_n_archetypes-1]
+wt_pca = wt.obsm['X_pca'][:, 0:wt_n_archetypes-1]
+in_out = []
+for i in range(wt_pca.shape[0]):
+    if i % 1000 == 0:
+        print(f'Cell {i}')
+    inside = polytope.is_inside(wt_vertices, wt_pca[i])
+    in_out.append(inside)
+in_out = np.array(in_out)
+print('Number of WT cells inside wildtype archetypes:', np.sum(in_out))
+# %%
+# Scatter plot with points colored by whether they are inside or outside the wildtype archetypes
+fig, ax = plt.subplots(1,1, figsize=(5,5))
+pc1 = 1
+pc2 = 5
+ax.scatter(wt_pca[:,pc1][~in_out], wt_pca[:,pc2][~in_out], c='grey', s=.1, alpha=.8)
+ax.scatter(wt_pca[:,pc1][in_out], wt_pca[:,pc2][in_out], c='magenta', s=3.9)
+ax.scatter(wt_vertices[0,], wt_vertices[1,], c='blue', s=100)
+ax.set_xlabel(f'PC{pc1}')
+ax.set_ylabel(f'PC{pc2}')
+# %%
+# Repeat the analysis for the mutant cells in the wildtype archetype polytope
+mut_in_out = []
+for i in range(mut_pca.shape[0]):
+    if i % 1000 == 0:
+        print(f'Cell {i}')
+    inside = polytope.is_inside(wt_vertices, mut_pca[i])
+    mut_in_out.append(inside)
+mut_in_out = np.array(mut_in_out)
+print('Number of mutant cells inside wildtype archetypes:', np.sum(in_out))
+# %%
+# Scatter plot with points colored by whether they are inside or outside the wildtype archetypes
+fig, ax = plt.subplots(1,1, figsize=(5,5))
+pc1 = 0
+pc2 = 1
+ax.scatter(mut_pca[:,pc1][~mut_in_out], mut_pca[:,pc2][~mut_in_out], c='grey', s=.1, alpha=.8)
+ax.scatter(mut_pca[:,pc1][mut_in_out], mut_pca[:,pc2][mut_in_out], c='magenta', s=3.9)
+ax.scatter(wt_vertices[0,], wt_vertices[1,], c='blue', s=100)
+ax.set_xlabel('PC1')
+ax.set_ylabel('PC2')
 # %%

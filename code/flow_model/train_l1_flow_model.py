@@ -13,8 +13,12 @@ from joblib import Parallel, delayed
 from datetime import datetime
 import os
 import sys
-from itertools import product
 import pickle
+from itertools import product
+
+#%%
+genotype='wildtype'
+dataset = 'net'
 
 #%%
 if is_notebook():
@@ -26,9 +30,11 @@ else:
         sys.exit(1)
     tmstp = sys.argv[1]
 
-#%%
-genotype='wildtype'
-dataset = 'net'
+    os.mkdir(f'../output/{tmstp}')
+    os.mkdir(f'../output/{tmstp}/logs')
+    os.mkdir(f'../output/{tmstp}/models')
+
+
 #%% 
 adata = sc.read_h5ad(f'../data/{genotype}_{dataset}.h5ad')
 
@@ -80,12 +86,6 @@ n_samples = 10
 loss_fn = torch.nn.MSELoss(reduction='mean')
 
 #%%
-os.mkdir(f'../output/{tmstp}')
-os.mkdir(f'../output/{tmstp}/logs')
-os.mkdir(f'../output/{tmstp}/params')
-os.mkdir(f'../output/{tmstp}/models')
-
-#%%
 n_epoch = 10_000
 num_nodes = X.shape[1]
 hidden_dim = 10
@@ -99,9 +99,12 @@ for node_model in model.models:
     torch.nn.init.uniform_(node_model.layers[0].weight, 0, 1)
 
 #%%
-def train(model_idx, gpu, param_idx):
-    lmbda = dict(params[param_idx])['lmbda']
-    logfile = open(f'../output/{tmstp}/logs/l1_flow_model_{model_idx}_{genotype}_{param_idx}.log', 'w')
+def train(model_idx, gpu, params, idx):
+    lmbda = params['lmbda']
+    if is_notebook():
+        logfile = sys.stdout
+    else:
+        logfile = open(f'../output/{tmstp}/logs/l1_flow_model_{model_idx}_{genotype}_{idx}.log', 'w')
     node_model = model.models[model_idx].to(f'cuda:{gpu}')
     optimizer = torch.optim.Adam(node_model.parameters(), lr=1e-3)
 
@@ -140,6 +143,12 @@ def train(model_idx, gpu, param_idx):
 # Hyperparameter tuning
 gpu_parallel = 5
 lmbda_space = [('lmbda',x) for x in np.linspace(1e-3, 1e-2, 10)]
+lmbda_space = [('lmbda',0)] + lmbda_space
+# If there are more params, 
+params = [dict(x) for x in zip(lmbda_space)]
+#%%
+train(0,0,params[1],0)
+#%%
 # hidden_dim_space = [('hidden_dim',x) for x in np.linspace(10, 100, 10)]
 trained_models = {}
 outfile = open(f'../output/train_l1_flow_model.out', 'w')
@@ -148,7 +157,7 @@ pickle.dump(params, open(f'../output/{tmstp}/params/l1_flow_model_{genotype}.pic
 for param_idx in range(len(params)):
     print(params, flush=True)
     parallel = Parallel(n_jobs=num_gpus*gpu_parallel)
-    trained_models[param_idx] = parallel(delayed(train)(i, i%num_gpus, param_idx) for i in range(num_nodes))
+    trained_models[param_idx] = parallel(delayed(train)(i, i%num_gpus, params[param_idx]) for i in range(num_nodes))
 #%%
 # Save the dictionary of trained models
 state_dicts = {}

@@ -109,7 +109,7 @@ class GraphFlowModel(torch.nn.Module):
                     raise Exception(f'Error: node {neighbor} is in the graph but it is not in the input data')
         
         for node in self.adj_list:
-            input_dim = len(graph.in_edges(node))
+            input_dim = len(self.adj_list[node])
             # TODO make this a parameter
             # minimum hidden dimension is 10
             hidden_dim = max(10, input_dim*2)
@@ -121,12 +121,8 @@ class GraphFlowModel(torch.nn.Module):
     def forward(self, state, node):
         # Apply each model to the portion of the state vector that
         #  corresponds to the inputs to the node in the graph
-        breakpoint()
-        output = torch.zeros(state.shape[0], device=state.device)
-
         inputs = state[:,self.adj_list[node]]
-        delta = model(inputs)
-        output[:,self.data_idxs[node]] = delta[:,0]
+        delta = self.models[node](inputs)
 
-        return output
+        return delta[:,0]
 
