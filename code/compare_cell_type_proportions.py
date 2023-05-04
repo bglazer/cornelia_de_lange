@@ -13,8 +13,8 @@ seed(0)
 wt = sc.read_h5ad('../data/wildtype_net.h5ad')
 mut = sc.read_h5ad('../data/mutant_net.h5ad')
 #%%
-wt_ct = wt.obs['cell_type'].value_counts()
-mut_ct = mut.obs['cell_type'].value_counts()
+wt_ct = wt.obs['cell_type'].value_counts()/wt.shape[0]
+mut_ct = mut.obs['cell_type'].value_counts()/mut.shape[0]
 # Get a list of all cell types
 cell_types = list(set(wt_ct.index).union(set(mut_ct.index)))
 
@@ -36,8 +36,8 @@ for i in range(n_iter):
     wt_rand = combined[combined.obs['condition'] == 'wildtype']
     mut_rand = combined[combined.obs['condition'] == 'mutant']
     # Compute the cell type counts
-    wt_ct_rand = wt_rand.obs['cell_type'].value_counts()
-    mut_ct_rand = mut_rand.obs['cell_type'].value_counts()
+    wt_ct_rand = wt_rand.obs['cell_type'].value_counts()/wt_rand.shape[0]
+    mut_ct_rand = mut_rand.obs['cell_type'].value_counts()/mut_rand.shape[0]
 
     # Compute the difference in cell type counts
     diff = np.abs(mut_ct_rand - wt_ct_rand)
@@ -61,3 +61,5 @@ sig_cell_types = [ct + '\n***' if diff[ct] > p99[i] else ct for i, ct in enumera
 axs.set_xticks(np.arange(len(cell_types))+width/4, sig_cell_types, fontsize=15);
 # plt.legend(fontsize=15)
 axs.legend()
+
+# %%
