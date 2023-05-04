@@ -235,15 +235,15 @@ in_out = []
 for i in range(wt_pca.shape[0]):
     if i % 1000 == 0:
         print(f'Cell {i}')
-    inside = polytope.is_inside(wt_vertices, wt_pca[i])
+    inside = polytope.is_inside(wt_vertices, wt_pca[i], delta=.1)
     in_out.append(inside)
 in_out = np.array(in_out)
 print('Number of WT cells inside wildtype archetypes:', np.sum(in_out))
 # %%
 # Scatter plot with points colored by whether they are inside or outside the wildtype archetypes
 fig, ax = plt.subplots(1,1, figsize=(5,5))
-pc1 = 1
-pc2 = 5
+pc1 = 0
+pc2 = 1
 ax.scatter(wt_pca[:,pc1][~in_out], wt_pca[:,pc2][~in_out], c='grey', s=.1, alpha=.8)
 ax.scatter(wt_pca[:,pc1][in_out], wt_pca[:,pc2][in_out], c='magenta', s=3.9)
 ax.scatter(wt_vertices[0,], wt_vertices[1,], c='blue', s=100)
