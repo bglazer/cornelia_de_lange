@@ -42,7 +42,7 @@ plt.ylabel('Number of mutant cells')
 mut_emb = mut.obsm['X_umap']
 wt_emb = wt.obsm['X_umap']
 
-plt.figure(figsize=(10,10))
+plt.figure(figsize=(5,5))
 plt.scatter(mut_emb[:,0], mut_emb[:,1],
             s=4, c=neighbor_dists/neighbor_dists.max(),
             cmap='Purples')
@@ -73,23 +73,25 @@ umap_axes(axs)
 from sklearn.linear_model import BayesianRidge
 import scipy
 
+n_clusters = wt.obsm['cluster_sums'].shape[1]
 fig, axs = plt.subplots(n_clusters, 3, figsize=(15,5*n_clusters))
 regressions = []
 for i in range(n_clusters):
     # Rmove the vertical gridlines
     axs[i,0].grid(axis='x')
     axs[i,1].grid(axis='x')
-    # Set the y axis limits to be the same for both plots
-    axs[i,0].set_ylim(0, 1)
-    axs[i,1].set_ylim(0, 1)
-    # Set the x axis limits to be the same for both plots
-    axs[i,0].set_xlim(0, 1)
-    axs[i,1].set_xlim(0, 1)
+    # # Set the y axis limits to be the same for both plots
+    # axs[i,0].set_ylim(0, 1)
+    # axs[i,1].set_ylim(0, 1)
+    # # Set the x axis limits to be the same for both plots
+    # axs[i,0].set_xlim(0, 1)
+    # axs[i,1].set_xlim(0, 1)
 
     # Fit a linear regression of the relationship between the pseudotime and cluster expression
     regression = BayesianRidge()
-    wt_expr = wt_expression_sum_nrm[:,i].reshape(-1,1)
-    mut_expr = mut_expression_sum_nrm[:,i].reshape(-1,1)
+    wt_expression_sum_nrm = wt.obsm['cluster_sums']/wt.obsm['cluster_sums'].sum(axis=1).reshape(-1,1)
+    wt_expr = wt.obsm['cluster_sums'][:,i].reshape(-1,1)
+    mut_expr = mut.obsm['cluster_sums'][:,i].reshape(-1,1)
     fit = regression.fit(wt_pseudotime.reshape(-1,1), wt_expr)
     regressions.append(fit)
     x = np.linspace(0,1,100).reshape(-1,1)
@@ -106,8 +108,8 @@ for i in range(n_clusters):
     mut_prob = scipy.stats.norm.pdf(error, loc=0, scale=mut_std)
     
         
-    axs[i,0].scatter(wt_pseudotime, wt_expression_sum_nrm[:,i], s=1, alpha=1)
-    axs[i,1].scatter(mut_pseudotime, mut_expression_sum_nrm[:,i], 
+    axs[i,0].scatter(wt_pseudotime, wt_expr, s=1, alpha=1)
+    axs[i,1].scatter(mut_pseudotime, mut_expr, 
                      s=1, alpha=1, c=neighbor_dists)
     axs[i,0].set_ylabel(f'Cluster {i} expression', fontsize=16)
     # Plot standard error bars of the WT regression line on the mutant data
@@ -360,6 +362,7 @@ for i in cluster_ids:
     mut_cluster_mask = mut_cluster_colors==i
     # Get the expression of the genes in the current cluster
     mut_gene_expr = mut[mut_cluster_mask, :].X.mean(axis=0)
+    mut_gene_expr = np.array(mut_gene_expr).flatten()
     # Sort to get the most highly expressed genes
     mut_gene_expr_sorted = np.argsort(mut_gene_expr)[::-1]
     # Get the names of the most highly expressed genes
@@ -376,17 +379,15 @@ from scipy.stats import ttest_ind
 # between the clusters
 cluster_diff_expr = {}
 cluster_diff_expr_pval = {}
-cluster_diff_expr_pval_corrected = {}
 num_tests = 0
-ngenes = mut.shape[1]
 
 for cluster_a, cluster_b in combinations(range(mut_cluster_colors.max()), r=2):
     # Get the cells in each cluster
     cluster_a_mask = mut_cluster_colors==cluster_a
     cluster_b_mask = mut_cluster_colors==cluster_b
     # Get the expression of the genes in each cluster
-    cluster_a_expr = mut[cluster_a_mask, :].X
-    cluster_b_expr = mut[cluster_b_mask, :].X
+    cluster_a_expr = mut[cluster_a_mask, :].X.toarray()
+    cluster_b_expr = mut[cluster_b_mask, :].X.toarray()
     # Calculate the mean expression of each gene in each cluster
     cluster_a_mean = cluster_a_expr.mean(axis=0)
     cluster_b_mean = cluster_b_expr.mean(axis=0)
@@ -399,8 +400,6 @@ for cluster_a, cluster_b in combinations(range(mut_cluster_colors.max()), r=2):
     num_tests += len(mut.var_names)
 
 #%%
-
-
 # Correct the p-values for multiple testing
 from statsmodels.stats.multitest import multipletests
 # Get the p-values  
@@ -408,10 +407,15 @@ pvals = np.array(list(cluster_diff_expr_pval.values())).flatten()
 # Correct the p-values
 # TODO redo this with fdr_bh when I figure out how to remove nans
 pvals_corrected = multipletests(pvals, method='bonferroni')[1]
+cluster_diff_expr_pval_corrected = {}
+n_genes = mut.shape[1]
+
 # Add the corrected p-values to the dictionary
 for i, (cluster_a, cluster_b) in enumerate(cluster_diff_expr_pval.keys()):
+    print(i,(cluster_a, cluster_b))
     cluster_diff_expr_pval_corrected[(cluster_a, cluster_b)] = pvals_corrected[i*ngenes:(i+1)*ngenes]
-
+    print(cluster_diff_expr_pval_corrected[(cluster_a, cluster_b)])
+#%%
 # For each cluster pair, get the most significantly differentially expressed genes
 for cluster_a, cluster_b in cluster_diff_expr_pval.keys():
     # Get the p-values for the current cluster pair
