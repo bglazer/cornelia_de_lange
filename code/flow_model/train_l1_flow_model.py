@@ -73,6 +73,7 @@ X_val = X[val_idxs]
 V_train = V[train_idxs]
 V_val = V[val_idxs]
 
+device='cuda:1'
 train_data = torch.tensor(X_train).to(torch.float32).to(device)
 val_data = torch.tensor(X_val).to(torch.float32).to(device)
 train_V = torch.tensor(V_train).to(torch.float32).to(device)

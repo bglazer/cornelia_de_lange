@@ -1,6 +1,6 @@
 #%%
-%load_ext autoreload
-%autoreload 2
+# %load_ext autoreload
+# %autoreload 2
 #%%
 import torch
 from matplotlib import pyplot as plt
@@ -17,10 +17,11 @@ from collections import deque
 from itertools import product
 # Import torch pruning 
 from torch.nn.utils import prune
+import json
 #%%
 # util is in the parent directory, so we need to add it to the path
 sys.path.append('..')
-from util import tonp, plot_arrows, velocity_vectors, embed_velocity, get_plot_limits, is_notebook
+from util import tonp, velocity_vectors, sliding_window
 #%%
 genotype='wildtype'
 dataset = 'net'
@@ -33,18 +34,15 @@ import random
 random.seed(0)
 
 #%%
-if is_notebook():
-    now = datetime.now()
-    tmstp = now.strftime("%Y%m%d_%H%M%S")
-else:
-    if len(sys.argv) < 2:
-        print('Usage: python train_l1_flow_model.py <timestamp>')
-        sys.exit(1)
-    tmstp = sys.argv[1]
-
-    os.mkdir(f'../output/{tmstp}')
-    os.mkdir(f'../output/{tmstp}/logs')
-    os.mkdir(f'../output/{tmstp}/models')
+if len(sys.argv) < 2:
+    print('Usage: python train_l1_flow_model.py <timestamp>')
+    sys.exit(1)
+tmstp = sys.argv[1]
+outdir = f'../../output/{tmstp}'
+os.mkdir(f'{outdir}')
+os.mkdir(f'{outdir}/logs')
+os.mkdir(f'{outdir}/models')
+os.mkdir(f'{outdir}/params')
 
 
 #%% 
@@ -64,10 +62,6 @@ T = adata.obsm['transition_matrix']
 V = velocity_vectors(T, X)
 
 #%%
-def embed(X, pcs=[0,1]):
-    return np.array(pca.transform(X)[:,pcs])
-
-#%%
 pct_train = 0.8
 n_train = int(pct_train*X.shape[0])
 n_val = X.shape[0] - n_train
@@ -78,7 +72,7 @@ X_val = X[val_idxs]
 V_train = V[train_idxs]
 V_val = V[val_idxs]
 
-num_gpus = 1
+num_gpus = 4
 train_data = [torch.tensor(X_train).to(torch.float32).to(f'cuda:{i}') for i in range(num_gpus)]
 val_data = [torch.tensor(X_val).to(torch.float32).to(f'cuda:{i}') for i in range(num_gpus)]
 train_V = [torch.tensor(V_train).to(torch.float32).to(f'cuda:{i}') for i in range(num_gpus)]
@@ -92,120 +86,149 @@ n_traces = 50
 n_samples = 10
 
 #%%
-n_epoch = 10_000
-diff_accumulation = 5
-diff_threshold = 1e-3
-num_nodes = X.shape[1]
-hidden_dim = 150
-num_layers = 6
+n_epoch = 5_000
+# Threshold for stopping training if the validation loss does not change by more than this amount
+delta_loss_threshold = 1e-2
+# Threshold for stopping training if the validation loss increases by more than this amount
+increased_loss_threshold = 1e-1
 
-device = 'cuda:0'
+# Average over the last N validation losses
+diff_accumulation = 5
+num_nodes = X.shape[1]
+hidden_dim = 32
+num_layers = 3
+
 model = L1FlowModel(input_dim=num_nodes, 
                     hidden_dim=hidden_dim, 
                     num_layers=num_layers)
 
 #%%
-def train(model_idx, gpu, params, idx):
-    if is_notebook():
-        logfile = sys.stdout
-    else:
-        logfile = open(f'../output/{tmstp}/logs/l1_flow_model_{model_idx}_{genotype}_{idx}.log', 'w')
+def train(model_idx, gpu, prune_amt):
+    logfile = open(f'{outdir}/logs/l1_flow_model_{model_idx}_{genotype}.log', 'w')
     node_model = model.models[model_idx].to(f'cuda:{gpu}')
     optimizer = torch.optim.Adam(node_model.parameters(), lr=1e-3)
 
-    prev_val_loss = 0
-    diffs = deque(maxlen=diff_accumulation)
-    for epoch in range(n_epoch+1):
-        optimizer.zero_grad()
-        # Run the model from N randomly selected data points
-        # Random sampling
-        idxs = torch.randint(0, train_data[gpu].shape[0], (n_points,))
-        starts = train_data[gpu][idxs]
-        pV = node_model(starts)
-        velocity = train_V[gpu][idxs, model_idx][:,None]
-        # Compute the loss between the predicted and true velocity vectors
-        loss = mse(pV, velocity)
-        # Compute the L1 penalty on the input weights
-        loss.backward()
-        optimizer.step()
+    models = []
 
-        # Every N steps plot the predicted and true vectors
-        if epoch % 100 == 0:
-            # Run the model on the validation set
-            val_pV = node_model(val_data[gpu])
-            val_loss = mse(val_pV, val_V[gpu][:,model_idx][:,None])
-            diff = abs(prev_val_loss - val_loss.item())/val_loss.item()
-            diffs.append(diff)
-            avg_diff = np.mean(diffs)
+    num_nodes = node_model.layers[0].in_features
+
+    if type(prune_amt) == int:
+        # Calculat an evenly spaced series of pruning steps, 
+        # np.linspace correctly handles calculating the last step size that will get to 1 node
+        n_rounds = num_nodes//prune_amt
+        steps = np.linspace(num_nodes, 1, n_rounds, dtype=int)
+        prune_steps = [a-b for a,b in sliding_window(steps, 2)]
+    elif type(prune_amt) == float:
+        # Calculate the number of percentage pruning rounds required to get to a single input
+        n_rounds = int(np.log(1.0/num_nodes)/np.log(1-prune_amt))
+        prune_steps = [prune_amt]*n_rounds
+    else:
+        raise ValueError('prune_amt must be an int or a float')
+    
+    n_rounds = len(prune_steps)
+
+    # Dummy pruning step to get the correct parameters in the model
+    node_model.layers[0] = prune.l1_unstructured(node_model.layers[0], 
+                                                 name='weight', 
+                                                 amount=0)
+
+    for round in range(n_rounds + 2):
+        best_model = None
+        diffs = deque(maxlen=diff_accumulation)
+        best_val_loss = np.inf
+        for epoch in range(n_epoch+1):
+            optimizer.zero_grad()
+            # Run the model from N randomly selected data points
+            # Random sampling
+            idxs = torch.randint(0, train_data[gpu].shape[0], (n_points,))
+            starts = train_data[gpu][idxs]
+            pV = node_model(starts)
+            velocity = train_V[gpu][idxs, model_idx][:,None]
+            # Compute the loss between the predicted and true velocity vectors
+            loss = mse(pV, velocity)
+            l1 = torch.abs(node_model.layers[0].weight.sum()) 
+            total = loss + l1
+            # Compute the L1 penalty on the input weights
+            total.backward()
+            optimizer.step()
+
+            # Every N steps calculate the validation loss
+            if epoch % 100 == 0:
+                # Run the model on the validation set
+                val_pV = node_model(val_data[gpu])
+                val_loss = mse(val_pV, val_V[gpu][:,model_idx][:,None])
+                # Save the model if it has the lowest validation loss
+                
+                if epoch > 0:
+                    diff = val_loss.item() - best_val_loss
+                    diffs.append(diff)
+                    avg_diff = np.mean(diffs)/best_val_loss
+                
+                logline = {'epoch': epoch, 
+                           'round': round,
+                           'train_loss': loss.item(),
+                           'validation_loss': val_loss.item()}
+                logfile.write(json.dumps(logline) + '\n')
+                
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss.item()
+                    best_model = node_model
+                    diffs.clear()
         
-            prev_val_loss = val_loss.item()
-            logfile.write(f'validation_diff: {model_idx:4d} {epoch:8d} {avg_diff:.4e}\n')
-            logfile.write(f'train_loss:      {model_idx:4d} {epoch:8d} {loss:.4e}\n')
-            logfile.write(f'validation_loss: {model_idx:4d} {epoch:8d} {val_loss.item():.4e}\n')
-            if avg_diff < diff_threshold:
-                return node_model
+                if len(diffs) == diff_accumulation:
+                    # Early stop if the validation loss is getting worse
+                    if avg_diff > increased_loss_threshold:
+                        break
+                    # Early stop if the validation loss is not changing
+                    if abs(avg_diff) < delta_loss_threshold:
+                        break
+        
+        node_model = best_model
+        models.append(node_model.state_dict())
+        if round > 0:
+            active_weights = int(node_model.layers[0].weight_mask.sum())
+            active_inputs = int((node_model.layers[0].weight_mask.sum(dim=0) > 0).sum())
+        else:
+            active_weights = num_nodes*hidden_dim
+            active_inputs = num_nodes
+        # L1 prune the input weights of the model
+        logline = {'round': round,
+                   'best_val_loss': best_val_loss,
+                   'active_weights': active_weights,
+                   'active_inputs': active_inputs}
+        logfile.write(json.dumps(logline) + '\n')
 
-    return node_model
+        if round < n_rounds:
+            prune_step = prune_steps[round]
+        elif round == n_rounds:
+            prune_step = active_inputs
+        else:
+            prune_step = 0
+            
+        node_model.layers[0] = prune.ln_structured(module=node_model.layers[0], 
+                                                name='weight', 
+                                                amount=prune_step,
+                                                n=1,
+                                                dim=1)
+    return models
+
 #%%
-model_idx = 28
-m=train(model_idx,0,{},0)
-#%%
-# Print pruning and training
-for i in range(5):
-    print(f'Pruning round {i}')
-    m = train(model_idx,0,{},0)
-    # L1 prune the input weights of the model
-    m.layers[0] = prune.l1_unstructured(m.layers[0], name='weight', amount=.4)
-    print(f'Active weights: {int(m.layers[0].weight_mask.sum()):d}')
-
-
+# model_idx = 33
+# nm=train(model_idx, 0, 50)
+# model.models[model_idx].load_state_dict(nm[-1])
 
 #%%
-# Hyperparameter tuning
 gpu_parallel = 5
-lmbda_space = [('lmbda',x) for x in np.linspace(1e-3, 1e-2, 10)]
-lmbda_space = [('lmbda',0)] + lmbda_space
-# If there are more params, 
-params = [dict(x) for x in zip(lmbda_space)]
-#%%
-# hidden_dim_space = [('hidden_dim',x) for x in np.linspace(10, 100, 10)]
+
 trained_models = {}
-outfile = open(f'../output/train_l1_flow_model.out', 'w')
-params = list(product(lmbda_space))
-pickle.dump(params, open(f'../output/{tmstp}/params/l1_flow_model_{genotype}.pickle', 'wb'))
-for param_idx in range(len(params)):
-    print(params, flush=True)
-    parallel = Parallel(n_jobs=num_gpus*gpu_parallel)
-    trained_models[param_idx] = parallel(delayed(train)(i, i%num_gpus, params[param_idx]) for i in range(num_nodes))
-#%%
-# Save the dictionary of trained models
-state_dicts = {}
-for model in trained_models:
-    state_dicts[model] = torch.nn.ModuleList(trained_models[model]).state_dict()
+params = {
+    'prune_amt': 10,
+    'prune_type': 'l1_structured',
+    'weight_penalty': 'l1'
+}
+pickle.dump(params, open(f'{outdir}/params/pruned_l1_flow_model_{genotype}.pickle', 'wb'))
+parallel = Parallel(n_jobs=num_gpus*gpu_parallel)
+trained_models = parallel(delayed(train)(i, i%num_gpus, params['prune_amt']) 
+                          for i in range(num_nodes))
 
-pickle.dump(state_dicts, open(f'../output/{tmstp}/models/l1_flow_model_{genotype}.pickle', 'wb'))
-
-#%%
-# model.models = torch.nn.ModuleList(trained_models)
-
-#%%
-gpu = 0
-idxs = torch.arange(val_data[gpu].shape[0])
-starts = val_data[gpu][idxs]
-model = model.to(f'cuda:{gpu}')
-pV = model(starts)
-dpv = embed_velocity(X=tonp(starts),
-                     velocity=tonp(pV),
-                     embed_fn=embed)
-plot_arrows(idxs=idxs,
-            points=embed(val_data[gpu])), 
-            V=embed_velocity,
-            pV=dpv,
-            sample_every=5,
-            scatter=False,
-            save_file=f'../figures/embedding/l1_vector_field_{genotype}_{tmstp}.png',
-            c=adata.obs['pseudotime'],
-            s=1.5,
-            xlimits=x_limits,
-            ylimits=y_limits)
-
+pickle.dump(trained_models, open(f'{outdir}/models/pruned_l1_flow_model_{genotype}.pickle', 'wb'))

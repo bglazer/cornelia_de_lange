@@ -28,6 +28,20 @@ class MLP(torch.nn.Module):
         for layer in self.layers:
             x = layer(x)
         return x
+    
+class GroupL1MLP(MLP):
+    def __init__(self, input_dim, output_dim, hidden_dim, num_layers):
+        super(GroupL1MLP, self).__init__(input_dim, output_dim, hidden_dim, num_layers)
+
+        self.group_l1 = torch.ones(self.layers[0].weight.shape[1])
+        self.group_l1 = torch.nn.Parameter(self.group_l1, requires_grad=True)
+
+    def forward(self, x):
+        x = x @ (self.layers[0].weight * self.group_l1).T
+
+        for layer in self.layers[1:]:
+            x = layer(x)
+        return x
 
 # FlowModel is a neural ODE that takes in a state and outputs a delta
 class ConnectedFlowModel(torch.nn.Module):
@@ -50,6 +64,27 @@ class L1FlowModel(torch.nn.Module):
             node = MLP(input_dim, 1, hidden_dim, num_layers, input_bias=False)
             self.models.append(node)
         self.models = torch.nn.ModuleList(self.models)
+
+    def forward(self, state):
+        delta = torch.zeros_like(state)
+        # For each node, run the corresponding MLP and insert the output into the delta tensor
+        for i,model in enumerate(self.models):
+            # state is a tensor of shape (num_nodes, num_states)
+            delta[:,i] = model(state).squeeze()
+            # Add the weights of the first layer to a list
+        # Get the weights of the first layer
+        return delta
+    
+class GroupL1FlowModel(torch.nn.Module):
+    def __init__(self, input_dim, hidden_dim, num_layers):
+        super(GroupL1FlowModel, self).__init__()
+        self.models = []
+        # Create a separate MLP for each node in the graph
+        for i in range(input_dim):
+            node = GroupL1MLP(input_dim, 1, hidden_dim, num_layers)
+            self.models.append(node)
+        self.models = torch.nn.ModuleList(self.models)
+        
 
     def forward(self, state):
         delta = torch.zeros_like(state)
