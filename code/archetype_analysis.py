@@ -20,13 +20,11 @@ mut = sc.read_h5ad(f'../data/mutant_{dataset}.h5ad')
 # %%
 # Find the number of archetypes in each dataset
 wt_n_archetypes = wt.obsm['arc_distance'].shape[1]
-mut_n_archetypes = mut.obsm['arc_distance'].shape[1]
 print(f'Wildtype has {wt_n_archetypes} archetypes')
-print(f'Mutant has {mut_n_archetypes} archetypes')
 
 #%%
-n_pcs = 3
-n_archetypes = max(wt_n_archetypes, mut_n_archetypes)
+n_pcs = 1
+n_archetypes = wt_n_archetypes
 fig, axs = plt.subplots(2*n_pcs, n_archetypes+1, figsize=(10,5*n_pcs))
 
 wt_umap = wt.obsm['X_umap']
@@ -56,7 +54,7 @@ for j in range(0, n_pcs):
         axs[row+i][0].set_ylabel(f'PC{pc2}')
         
     def plot_archetype_dist(data, ax, i):
-        archetype_score = data.obs[f'Arc_{i}_PCHA_Score']
+        archetype_score = data.obsm['arc_distance']['Arc_'+str(i)]
         pca = data.obsm['X_pca']
         ax.scatter(pca[:,pc1], pca[:,pc2], c = archetype_score, cmap = 'RdBu', s=.2)
         ax.set_title(f'Archetype {i}')
@@ -67,15 +65,8 @@ for j in range(0, n_pcs):
     # Color cells by their distance to each archetype
     for i in range(0,n_archetypes):
         col = i+1
-        if i < wt_n_archetypes:
-            axs[row][col] = plot_archetype_dist(wt, axs[row,col], i+1)
-        else:
-            # If there are more archetypes in the mutant, plot a blank subplot
-            axs[row][col].axis('off')
-        if i < mut_n_archetypes:
-            axs[row+1][col] = plot_archetype_dist(mut, axs[row+1,col], i+1)
-        else:
-            axs[row+1][col].axis('off')
+        axs[row][col] = plot_archetype_dist(wt, axs[row,col], i+1)
+        axs[row+1][col] = plot_archetype_dist(mut, axs[row+1,col], i+1)
 
     plt.tight_layout()
 
@@ -84,12 +75,12 @@ for j in range(0, n_pcs):
 # Find the percentage of each cell type in each archetype's "specialists"
 cell_type_pcts = {'wt':{}, 'mut':{}}
 
-for i in range(1,wt_n_archetypes+1):
+for i in range(1,n_archetypes+1):
     specialists = wt.obs['specialists_pca_diffdist'] == f'Arc_{i}'
     pcts = wt.obs['cell_type'][specialists].value_counts(normalize=True)
     cell_type_pcts['wt'][f'Arc_{i}'] = pcts
 
-for i in range(1,mut_n_archetypes+1):
+for i in range(1,n_archetypes+1):
     specialists = mut.obs['specialists_pca_diffdist'] == f'Arc_{i}'
     pcts = mut.obs['cell_type'][specialists].value_counts(normalize=True)
     cell_type_pcts['mut'][f'Arc_{i}'] = pcts
@@ -227,18 +218,18 @@ plt.tight_layout()
 # %%
 # Find wildtype cells that are entirely within the polytope formed by wildtype archetypes
 # This is a sanity check to make sure that the wildtype archetypes are well defined
-wt_vertices = wt.uns['archetype_vertices'][:wt_n_archetypes-1]
+wt_vertices = wt.uns['archetype_vertices'][:wt_n_archetypes]
 archetype_dim = wt_vertices.shape[0]
-mut_pca = mut.obsm['X_pca'][:, 0:wt_n_archetypes-1]
-wt_pca = wt.obsm['X_pca'][:, 0:wt_n_archetypes-1]
+mut_pca = mut.obsm['X_pca'][:, 0:4]
+wt_pca = wt.obsm['X_pca'][:, 0:4]
 in_out = []
 for i in range(wt_pca.shape[0]):
-    if i % 1000 == 0:
-        print(f'Cell {i}')
-    inside = polytope.is_inside(wt_vertices, wt_pca[i], delta=.1)
+    inside = polytope.is_inside(wt_vertices.T, wt_pca[i])
     in_out.append(inside)
 in_out = np.array(in_out)
 print('Number of WT cells inside wildtype archetypes:', np.sum(in_out))
+print('Percent of WT cells inside wildtype archetypes:', np.sum(in_out)/in_out.shape[0])
+
 # %%
 # Scatter plot with points colored by whether they are inside or outside the wildtype archetypes
 fig, ax = plt.subplots(1,1, figsize=(5,5))
@@ -249,16 +240,16 @@ ax.scatter(wt_pca[:,pc1][in_out], wt_pca[:,pc2][in_out], c='magenta', s=3.9)
 ax.scatter(wt_vertices[0,], wt_vertices[1,], c='blue', s=100)
 ax.set_xlabel(f'PC{pc1}')
 ax.set_ylabel(f'PC{pc2}')
+ax.set_title('Wildtype')
 # %%
 # Repeat the analysis for the mutant cells in the wildtype archetype polytope
 mut_in_out = []
 for i in range(mut_pca.shape[0]):
-    if i % 1000 == 0:
-        print(f'Cell {i}')
-    inside = polytope.is_inside(wt_vertices, mut_pca[i])
+    inside = polytope.is_inside(wt_vertices.T, mut_pca[i])
     mut_in_out.append(inside)
 mut_in_out = np.array(mut_in_out)
-print('Number of mutant cells inside wildtype archetypes:', np.sum(in_out))
+print('Number of mutant cells inside wildtype archetypes:', np.sum(mut_in_out))
+print('Percent of mutant cells inside wildtype archetypes:', np.sum(mut_in_out)/mut_in_out.shape[0])
 # %%
 # Scatter plot with points colored by whether they are inside or outside the wildtype archetypes
 fig, ax = plt.subplots(1,1, figsize=(5,5))
@@ -269,4 +260,5 @@ ax.scatter(mut_pca[:,pc1][mut_in_out], mut_pca[:,pc2][mut_in_out], c='magenta', 
 ax.scatter(wt_vertices[0,], wt_vertices[1,], c='blue', s=100)
 ax.set_xlabel('PC1')
 ax.set_ylabel('PC2')
+ax.set_title('Mutant')
 # %%
