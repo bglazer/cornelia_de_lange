@@ -177,3 +177,16 @@ def find_knee(x,y):
         raise Exception("No knee found")
     
     return knee, farthestk
+
+from itertools import islice
+from collections import deque
+
+def sliding_window(iterable, n):
+    # sliding_window('ABCDEFG', 4) --> ABCD BCDE CDEF DEFG
+    it = iter(iterable)
+    window = deque(islice(it, n), maxlen=n)
+    if len(window) == n:
+        yield tuple(window)
+    for x in it:
+        window.append(x)
+        yield tuple(window)
