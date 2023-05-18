@@ -4,12 +4,12 @@ import numpy as np
 import scanpy as sc
 from util import umap_axes
 from umap import UMAP
+from sklearn.decomposition import PCA
+from random import seed
 
 #%%
 # Set the random seed for reproducibility
-import numpy as np
 np.random.seed(42)
-from random import seed
 seed(42)
 
 #%%
@@ -40,7 +40,15 @@ mut.obsm['X_umap'] = umap_embedding[adata.obs['genotype']=='mutant',:]
 
 #%%
 # PCA embed the combined data
-sc.pp.pca(adata, n_comps=50, random_state=42)
+pca = PCA(n_components=50, random_state=42)
+proj = pca.fit_transform(adata.X.toarray())
+wt.obsm['X_pca'] = proj[adata.obs['genotype']=='wildtype',:]
+wt.uns['PCs'] = pca.components_
+wt.uns['pca_mean'] = pca.mean_
+#%%
+mut.obsm['X_pca'] = proj[adata.obs['genotype']=='mutant',:]
+mut.uns['PCs'] = pca.components_
+mut.uns['pca_mean'] = pca.mean_
 
 # %%
 # Save the combined dataset
@@ -48,5 +56,6 @@ sc.pp.pca(adata, n_comps=50, random_state=42)
 # Save the WT and network datasets
 wt.write_h5ad(f'../data/wildtype_{dataset}.h5ad')
 mut.write_h5ad(f'../data/mutant_{dataset}.h5ad')
+
 
 # %%
