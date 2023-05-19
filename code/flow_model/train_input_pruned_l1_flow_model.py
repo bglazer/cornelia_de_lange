@@ -9,16 +9,13 @@ import scanpy as sc
 from flow_model import L1FlowModel
 from sklearn.decomposition import PCA
 from joblib import Parallel, delayed
-from datetime import datetime
 import os
 import sys
 import pickle
 from collections import deque
-from itertools import product
 # Import torch pruning 
 from torch.nn.utils import prune
 import json
-import copy
 from math import ceil
 #%%
 # util is in the parent directory, so we need to add it to the path
@@ -107,13 +104,15 @@ model = L1FlowModel(input_dim=num_nodes,
 #%%
 def train(model_idx, gpu, prune_amt):
     logfile = open(f'{outdir}/logs/l1_flow_model_{model_idx}_{genotype}.log', 'w')
+    # logfile = sys.stdout
     node_model = model.models[model_idx].to(f'cuda:{gpu}')
-    linear_layers = [i for i,layer in enumerate(node_model.layers)
-                     if type(layer) is torch.nn.Linear]
+    
     optimizer = torch.optim.Adam(node_model.parameters(), lr=1e-3)
 
     models = []
 
+    linear_layers = [i for i,layer in enumerate(node_model.layers[:1])
+                     if type(layer) is torch.nn.Linear]
     layer_sizes = np.array([node_model.layers[i].weight.shape[1]
                             for i in linear_layers])
     num_nodes = int(layer_sizes.sum())
@@ -121,11 +120,11 @@ def train(model_idx, gpu, prune_amt):
 
     if type(prune_amt) == int:
         # Calculat an evenly spaced series of pruning steps, 
-        # np.linspace correctly handles calculating the last step size that will get to 1 node
+        # np.linspace correctly handles calculating the last step size 
+        # that will get to 1 node
         n_rounds = num_nodes//prune_amt
-        steps = np.linspace(num_nodes, 1, n_rounds, dtype=int)
+        steps = np.linspace(num_nodes, 0, n_rounds, dtype=int)
         prune_steps = [a-b for a,b in sliding_window(steps, 2)] + [0]
-        print(prune_steps)
     elif type(prune_amt) == float:
         # Calculate the number of percentage pruning rounds required to get to a single input
         n_rounds = int(np.log(1.0/num_nodes)/np.log(1-prune_amt))
@@ -134,12 +133,6 @@ def train(model_idx, gpu, prune_amt):
         raise ValueError('prune_amt must be an int or a float')
     
     n_rounds = len(prune_steps)
-
-    # Dummy pruning step to get the correct parameters in the model
-    for i in linear_layers:
-        node_model.layers[i] = prune.l1_unstructured(node_model.layers[i], 
-                                                     name='weight', 
-                                                     amount=0)
 
     for round in range(n_rounds):
         best_model = None
@@ -213,8 +206,8 @@ def train(model_idx, gpu, prune_amt):
         for i, layer_idx in enumerate(linear_layers):
             layer_pct = layer_pcts[i]
             step = ceil(prune_step*layer_pct)
-            if step >= active_nodes[i]:
-                step = active_nodes[i] - 1
+            if step > active_nodes[i]:
+                step = active_nodes[i]
             node_model.layers[layer_idx] = prune.ln_structured(module=node_model.layers[layer_idx], 
                                                                name='weight', 
                                                                amount=step,
@@ -224,10 +217,10 @@ def train(model_idx, gpu, prune_amt):
     return models
 
 #%%
-# model_idx = 76
-# nm=train(model_idx, 0, 10)
+model_idx = 51
+nm=train(model_idx, 0, 50)
 #%%
-# model.models[model_idx].load_state_dict(nm[3])
+model.models[model_idx].load_state_dict(nm[3])
 
 #%%
 gpu_parallel = 5
@@ -235,7 +228,7 @@ gpu_parallel = 5
 trained_models = {}
 params = {
     'prune_amt': 10,
-    'prune_type': 'l1_structured_global',
+    'prune_type': 'l1_structured_input',
     'weight_penalty': 'l1'
 }
 pickle.dump(params, open(f'{outdir}/params/pruned_l1_flow_model_{genotype}.pickle', 'wb'))
