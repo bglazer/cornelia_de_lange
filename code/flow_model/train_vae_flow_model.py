@@ -66,8 +66,6 @@ pca.mean_ = adata.X.mean(axis=0)
 X = adata.X.toarray()
 T = adata.obsm['transition_matrix']
 
-V = velocity_vectors(T, X)
-
 #%%
 def embed(X, pcs=[0,1]):
     return np.array(pca.transform(X)[:,pcs])

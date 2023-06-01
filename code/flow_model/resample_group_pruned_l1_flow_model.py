@@ -6,14 +6,12 @@ import torch
 import numpy as np
 import scanpy as sc
 from flow_model import GroupL1FlowModel
-from sklearn.decomposition import PCA
 from joblib import Parallel, delayed
 from datetime import datetime
 import os
 import sys
 import pickle
 from collections import deque
-from torch.nn.utils import prune
 import json
 from copy import deepcopy
 from datetime import datetime, timedelta
@@ -26,7 +24,7 @@ start_tmstp = datetime.now().timestamp()
 sys.path.append('..')
 from util import velocity_vectors, is_notebook
 #%%
-genotype='wildtype'
+genotype='mutant'
 dataset = 'net'
 
 #%% 
@@ -56,21 +54,11 @@ else:
 adata = sc.read_h5ad(f'../../data/{genotype}_{dataset}.h5ad')
 
 #%%
-pcs = adata.varm['PCs']
-pca = PCA()
-pca.components_ = pcs.T
-pca.mean_ = adata.X.mean(axis=0)
-
-#%%
 # Get the transition matrix from the VIA graph
 X = adata.X.toarray()
 T = adata.obsm['transition_matrix']
 
 V = velocity_vectors(T, X)
-
-#%%
-def embed(X, pcs=[0,1]):
-    return np.array(pca.transform(X)[:,pcs])
 
 #%%
 pct_train = 0.8
@@ -106,28 +94,34 @@ loss_accumulation = 5
 num_nodes = X.shape[1]
 hidden_dim = 32
 num_layers = 3
-checkpoint_interval = 100
-
-rewind_checkpoints = {}
+checkpoint_interval = 10
+# NOTE: The l1_alpha and the learning rate are manually set based on the results
+# of hyperparameter tuning done in train_group_pruned_l1_flow_model.py
+l1_alpha = 0.6
+lr = 5e-4
 
 model = GroupL1FlowModel(input_dim=num_nodes, 
                          hidden_dim=hidden_dim, 
                          num_layers=num_layers)
 
 #%%
-def train(model_idx, gpu, l1_alphas):
+def train(model_idx, gpu, l1_alpha, iterations):
     if is_notebook():
         logfile = sys.stdout
     else:
         logfile = open(f'{outdir}/logs/l1_flow_model_{model_idx}_{genotype}.log', 'w')
     node_model = model.models[model_idx].to(f'cuda:{gpu}')
-    optimizer = torch.optim.Adam(node_model.parameters(), lr=5e-4)
 
     models = []
 
-    best_model = None
-    loss_queue = deque(maxlen=loss_accumulation)
-    for iteration, l1_alpha in enumerate(l1_alphas):
+    for iteration in range(iterations):
+        # Re-initialize the weights to different random values
+        for layer in node_model.layers:
+            if type(layer) is torch.nn.Linear:
+                layer.reset_parameters()
+        torch.nn.init.ones_(node_model.group_l1)
+        optimizer = torch.optim.Adam(node_model.parameters(), lr=lr)
+        loss_queue = deque(maxlen=loss_accumulation)    
         for epoch in range(n_epoch+1):
             optimizer.zero_grad()
             # Run the model from N randomly selected data points
@@ -146,9 +140,6 @@ def train(model_idx, gpu, l1_alphas):
 
             # Every N steps calculate the validation loss
             if epoch % checkpoint_interval == 0:
-                if iteration == 0:
-                    rewind_checkpoints[epoch] = deepcopy(node_model.state_dict())
-                
                 # Run the model on the validation set
                 val_pV = node_model(val_data[gpu])
                 val_loss = mse(val_pV, val_V[gpu][:,model_idx][:,None])
@@ -170,7 +161,7 @@ def train(model_idx, gpu, l1_alphas):
                 # We have enough losses in the queue to evaluate the stopping criteria
                 accumulated_losses = len(loss_queue) == loss_accumulation
                 # If its the first round or we've pruned some inputs
-                pruned_or_first = (iteration== 0 or active_inputs < num_nodes)
+                pruned_or_first = (active_inputs < num_nodes)
                 # If the validation loss has not changed by more than the threshold
                 no_change = abs(pct_var) < delta_loss_threshold
                 conditions = [accumulated_losses, pruned_or_first, no_change]
@@ -183,43 +174,38 @@ def train(model_idx, gpu, l1_alphas):
             'active_inputs': active_inputs,
         }
         logfile.write(json.dumps(logline) + '\n')
-        if iteration == 0:
-            rewind_epoch = (int(epoch * .05) // checkpoint_interval) * checkpoint_interval
-            rewind_epoch = max(rewind_epoch, checkpoint_interval)
-            rewind_checkpoint = rewind_checkpoints[rewind_epoch]
 
         models.append(deepcopy(node_model.state_dict()))
-        node_model.load_state_dict(rewind_checkpoint)
-
 
     return models
 
 # %%
 # model_idx = 0
-# #%%
+#%%
 # model_idx += 1
-# #%%
-# nms = train(model_idx, 0, list(np.linspace(.01, .6, 6)) + [100.0])
+# nms = train(model_idx, 0, l1_alpha, 5)
 
 #%%
 gpu_parallel = 5
 
 trained_models = {}
 # Start with zero penalty, then increase, then finish with very high penalty to induce total pruning
-l1_alphas = [0.0] + list(np.linspace(.01, .6, 6)) + [100.0]
-note = '''Trained with group L1 penalty, pruned during training.'''
+note = \
+'''Retraining multiple times with different initializations to induce variance in the pruned inputs.
+Running on mutant '''
 params = {
-    'l1_alphas': l1_alphas,
+    'l1_alpha': l1_alpha,
     'prune_type': 'Group L1 penalty, pruned during training',
     'weight_penalty': 'l1',
+    'num_iterations': 100,
     'note': note,
 }
-pickle.dump(params, open(f'{outdir}/params/group_l1_flow_model_{genotype}.pickle', 'wb'))
+pickle.dump(params, open(f'{outdir}/params/resampled_group_l1_flow_model_{genotype}.pickle', 'wb'))
 parallel = Parallel(n_jobs=num_gpus*gpu_parallel)
-trained_models = parallel(delayed(train)(i, i%num_gpus, params['l1_alphas'])
+trained_models = parallel(delayed(train)(i, i%num_gpus, params['l1_alpha'], params['num_iterations'])
                           for i in range(num_nodes))
 
-model_filename = f'{outdir}/models/group_l1_flow_model_{genotype}.pickle'
+model_filename = f'{outdir}/models/resampled_group_l1_flow_models_{genotype}.pickle'
 with open(model_filename, 'wb') as model_file:
     pickle.dump(trained_models, model_file)
 

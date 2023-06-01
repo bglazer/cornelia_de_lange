@@ -82,6 +82,7 @@ for i, genotype in enumerate(['wildtype', 'mutant']):
     # ax.scatter(proj[:,0], proj[:,1], s=1, alpha=0.2, c=cell_labels, cmap='tab20')
     ax.set_xlim(minX-xbuf, maxX+xbuf)
     ax.set_ylim(minY-ybuf, maxY+ybuf)
+    ax.set_facecolor('grey')
     # add a grid to the plot
     for x in x_grid_points:
         ax.axvline(x, color='black', alpha=0.1)
@@ -94,6 +95,7 @@ for i, genotype in enumerate(['wildtype', 'mutant']):
             continue
         x,y = grid[i,:]
         # Color the arrows by the cosine similarity
+
         ax.arrow(x + x_spacing/2, y + y_spacing/2, v[0], v[1], 
                  width=0.025, head_width=0.1, head_length=0.05, 
                  color=plt.cm.viridis(cosine_sim[i]))
@@ -155,3 +157,4 @@ plt.legend(handles=legend_elements, labels=cell_types, loc='center left', bbox_t
 plt.tight_layout()
 
 # %%
+# Load the model 

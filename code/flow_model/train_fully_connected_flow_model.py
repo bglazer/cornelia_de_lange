@@ -3,11 +3,13 @@ import torch
 import scanpy as sc
 import numpy as np
 from flow_model import ConnectedFlowModel
-from util import tonp, plot_arrows, velocity_vectors, embed_velocity, is_notebook, get_plot_limits
 import sys
 from datetime import datetime
 import os
 from sklearn.decomposition import PCA
+import json
+sys.path.append('..')
+from util import tonp, plot_arrows, velocity_vectors, embed_velocity, is_notebook, get_plot_limits
 
 #%%
 genotype='wildtype'
@@ -24,14 +26,15 @@ else:
         sys.exit(1)
     tmstp = sys.argv[1]
 
-    os.mkdir(f'../output/{tmstp}')
-    os.mkdir(f'../output/{tmstp}/logs')
-    os.mkdir(f'../output/{tmstp}/models')
-    logfile = open(f'../output/{tmstp}/logs/connected_model_{genotype}.log', 'w')
+    outdir = f'../../output/{tmstp}'
+    os.mkdir(outdir)
+    os.mkdir(f'{outdir}/logs')
+    os.mkdir(f'{outdir}/models')
+    logfile = open(f'{outdir}/logs/connected_model_{genotype}.log', 'w')
 
 print(tmstp)
 print('Setting up')
-adata = sc.read_h5ad(f'../data/{genotype}_{dataset}.h5ad')
+adata = sc.read_h5ad(f'../../data/{genotype}_{dataset}.h5ad')
 device = 'cuda:0'
 
 #%%
@@ -72,9 +75,10 @@ full_V = torch.tensor(V).to(torch.float32).to(device)
 #%%
 mse = torch.nn.MSELoss(reduction='mean')
 
-n_epoch = 10_000
+n_epoch = 5_000
 n_points = 1_000
 
+best_validation_loss = float('inf')
 #%%
 for i in range(n_epoch+1):
     optimizer.zero_grad()
@@ -94,17 +98,30 @@ for i in range(n_epoch+1):
     loss = mse(pV, velocity)
     loss.backward()
     optimizer.step()
-    logfile.write(f'{i} Train loss: {loss.item():.9f}\n')
-    if i%100 == 0:
+    logline = {
+        'epoch': i,
+        'train_loss': loss.item(),
+    }
+    logfile.write(json.dumps(logline) + '\n')
+    if i%10 == 0:
         # Run the model on the validation set
         pV_val = model(val_data)
         val_loss = mse(pV_val, val_V)
-        logfile.write(f'{i} Validation loss: {val_loss.item():.9f}\n')
+        if val_loss < best_validation_loss:
+            best_validation_loss = val_loss
+        logline = {
+            'epoch': i,
+            'validation_loss': val_loss.item(),
+        }
+        logfile.write(json.dumps(logline) + '\n')
+
+print('Best validation loss:', best_validation_loss.item())
+
 #%%
 if not is_notebook():
     logfile.close()
     torch.save(model.state_dict(), 
-            f'../output/{tmstp}/models/connected_model_{genotype}.torch')
+            f'{outdir}/models/connected_model_{genotype}.torch')
 # %%
 pcs = adata.varm['PCs']
 pca = PCA()
@@ -125,16 +142,16 @@ dpv = embed_velocity(X=tonp(full_data),
                     embed_fn=embed,)
 idxs = np.arange(0, embedding.shape[0], 1)
 x_limits, y_limits = get_plot_limits(embedding)
-plot_arrows(idxs=idxs,
+plot_arrows(idxs=val_idxs,
             points=embedding, 
             V=V_emb,
             pV=dpv,
-            sample_every=5,
+            sample_every=1,
             scatter=False,
-            save_file=f'../figures/embedding/vector_field_wildtype_fully_connected_{tmstp}.png',
+            save_file=f'../../figures/embedding/vector_field_{genotype}_fully_connected_{tmstp}.png',
             c=adata.obs['pseudotime'],
             s=1.5,
             xlimits=x_limits,
             ylimits=y_limits)
-            
+
 # %%
