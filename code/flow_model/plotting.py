@@ -9,13 +9,12 @@ import util
 
 def distribution(trajectories, pca):
     # Plot a scatter plot showing the overall distribution of points in the trajectories
-    t = util.tonp(trajectories)
-    t_emb = pca.transform(t.reshape(-1, t.shape[2]))[:,:2]
-    t_emb = t_emb.reshape(t.shape[0], t.shape[1], -1)
+    t_emb = pca.transform(trajectories.reshape(-1, trajectories.shape[2]))[:,:2]
+    t_emb = t_emb.reshape(trajectories.shape[0], trajectories.shape[1], -1)
     # Connect the scatter plot points
     # Color the points by the distance along the trajectory
     colormap = matplotlib.colormaps.get_cmap('gnuplot')
-    len_trajectory = t.shape[0]
+    len_trajectory = trajectories.shape[0]
     colors = colormap(np.arange(len_trajectory)/len_trajectory)
     # plt.scatter(proj[:,0], proj[:,1], s=.1,
     #             c=cell_colors, cmap='tab20c')
@@ -35,9 +34,8 @@ def sample_trajectories(trajectories, X, pca, genotype):
     # Choose a random sample of 16 trajectories
     num_trajectories = trajectories.shape[1]
     proj = np.array(pca.transform(X)[:,0:2])
-    t = util.tonp(trajectories)
-    t_emb = pca.transform(t.reshape(-1, t.shape[2]))[:,:2]
-    t_emb = t_emb.reshape(t.shape[0], t.shape[1], -1)
+    t_emb = pca.transform(trajectories.reshape(-1, trajectories.shape[2]))[:,:2]
+    t_emb = t_emb.reshape(trajectories.shape[0], trajectories.shape[1], -1)
     for i,idx in enumerate(random.sample(range(num_trajectories), nrow*ncol)):
         # Plot the scatter plot
         ax = axs[i//ncol, i%ncol]
@@ -53,10 +51,10 @@ def sample_trajectories(trajectories, X, pca, genotype):
     plt.tight_layout()
     plt.subplots_adjust(top=0.95)
 
-def arrow_grid(data, pca, model, genotype):
+def arrow_grid(data, pca, model, genotype, device, knockout_idx=None):
     X = data.X.toarray()
     proj = np.array(pca.transform(X))[:,0:2]
-    X = torch.tensor(X).float()
+    X = torch.tensor(X, device=device).float()
     # Find the extent of the scatter plot
     minX = np.min(proj[:,0])
     maxX = np.max(proj[:,0])
@@ -80,15 +78,27 @@ def arrow_grid(data, pca, model, genotype):
     velocities = torch.zeros(len(grid), X.shape[1])
     variances = torch.zeros(len(grid), X.shape[1])
     grid_means = torch.zeros(len(grid), X.shape[1])
+    if knockout_idx is not None:
+        X[:,knockout_idx] = 0.0
+
+    with torch.no_grad():
+        x = X.clone()
+        if knockout_idx is not None:
+            x[:,knockout_idx] = 0.0
+        velos, vars = model(x)
+
     for i,(x,y) in enumerate(grid):
         # Find the points inside the grid cell
         idx = np.where((proj[:,0] > x) & (proj[:,0] < x+x_spacing) & 
-                        (proj[:,1] > y) & (proj[:,1] < y+y_spacing))[0]
+                       (proj[:,1] > y) & (proj[:,1] < y+y_spacing))[0]
         # If there are any points inside the grid cell
         if len(idx) > 0:
             # Get the average velocity vector for the points 
             # inside the grid cell
-            velo, var = model(X[idx,:])
+            velo = velos[idx,:]
+            var = vars[idx,:]
+            if knockout_idx is not None:
+                velo[:,knockout_idx] = 0.0
             velocities[i] = velo.mean(axis=0).reshape(-1)
             variances[i] = var.mean(axis=0).reshape(-1)
             grid_means[i] = X[idx,:].mean(axis=0)
@@ -129,7 +139,7 @@ def arrow_grid(data, pca, model, genotype):
     ax.set_ylabel('PC2')
     ax.set_title(f'{genotype.capitalize()}', fontsize=14);
 
-def cell_type_proportions(trajectories, data, kdtree, genotype):
+def cell_type_proportions(trajectories, data, nearest_idxs, genotype):
     # Plot the proportion of each cell type in the trajectories
     len_trajectory = trajectories.shape[0]
     num_trajectories = trajectories.shape[1]
@@ -139,12 +149,13 @@ def cell_type_proportions(trajectories, data, kdtree, genotype):
     cell_type_trajectories = np.zeros((len_trajectory, num_cell_types), dtype=int)
     # For each point in every trajectory
     for i in range(len_trajectory):
-        for j in range(num_trajectories):
-            # Find the nearest cell in the dataset
-            nearest_cell = kdtree.query(trajectories[i,j,:].reshape(1,-1))[1][0][0]
-            # Increment the count for the cell type of the nearest cell
-            cell_type = data.obs['cell_type'][nearest_cell]
-            cell_type_trajectories[i,cell_types[cell_type]] += 1
+        # Increment the count for the cell type of the nearest cell
+        cell_type = data.obs['cell_type'][nearest_idxs[i]]
+        cell_type_idxs = cell_type.map(cell_types)
+        # Convert the cell_type_idx to a numpy array with num_cell_types elements
+        # and a count of the number of times each cell type appears in the trajectory
+        cell_type_trajectories[i,:] = np.bincount(cell_type_idxs, minlength=num_cell_types)
+        
         
     # %%
     plt.imshow(cell_type_trajectories.T, aspect='auto', cmap='Blues', interpolation='none')
