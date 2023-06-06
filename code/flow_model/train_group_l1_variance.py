@@ -1,11 +1,12 @@
 #%%
 # %load_ext autoreload
 # %autoreload 2
+
 #%%
 import torch
 import numpy as np
 import scanpy as sc
-from flow_model import GroupL1FlowModel
+from flow_model import GroupL1FlowModel, GroupL1MLP
 from sklearn.decomposition import PCA
 from joblib import Parallel, delayed
 from datetime import datetime
@@ -13,7 +14,6 @@ import os
 import sys
 import pickle
 from collections import deque
-from torch.nn.utils import prune
 import json
 from copy import deepcopy
 from datetime import datetime, timedelta
@@ -109,132 +109,115 @@ delta_loss_threshold = 5e-3
 # Average over the last N validation losses
 loss_accumulation = 5
 num_nodes = X.shape[1]
-hidden_dim = 32
 num_layers = 3
 checkpoint_interval = 100
 
-rewind_checkpoints = {}
-
-model = GroupL1FlowModel(input_dim=num_nodes, 
-                         hidden_dim=hidden_dim, 
-                         num_layers=num_layers,
-                         predict_var=True)
-
 #%%
-def train(model_idx, gpu, l1_alphas):
+def train(idx, params, gpu):
     if is_notebook():
         logfile = sys.stdout
     else:
-        logfile = open(f'{outdir}/logs/l1_flow_model_{model_idx}_{genotype}.log', 'w')
-    node_model = model.models[model_idx].to(f'cuda:{gpu}')
+        logfile = open(f'{outdir}/logs/l1_flow_model_{idx}_{genotype}.log', 'w')
+    l1_alpha = params['l1_alpha']
+    hidden_dim = params['hidden_dim']
+    model_idx = params['model_idx']
+    print(params)
+
+    node_model = GroupL1MLP(num_nodes, 2, hidden_dim, num_layers).to(f'cuda:{gpu}')
     optimizer = torch.optim.Adam(node_model.parameters(), lr=5e-4)
-
-    models = []
-
-    best_model = None
+    
     loss_queue = deque(maxlen=loss_accumulation)
-    for iteration, l1_alpha in enumerate(l1_alphas):
-        for epoch in range(n_epoch+1):
-            optimizer.zero_grad()
-            # Run the model from N randomly selected data points
-            # Random sampling
-            idxs = torch.randint(0, train_data[gpu].shape[0], (n_points,))
-            starts = train_data[gpu][idxs]
-            y = node_model(starts)
-            pV = y[:,0,None]
-            pVar = y[:,1,None]
-            velocity = train_V[gpu][idxs, model_idx][:,None]
-            variance = train_V_var[gpu][idxs, model_idx][:,None]
-            # Compute the loss between the predicted and true velocity vectors
-            mean_loss = mse(pV, velocity)
-            var_loss = mse(pVar, variance)
-            l1 = node_model.group_l1.mean()
-            loss = mean_loss + var_loss + l1*l1_alpha
-            # Compute the L1 penalty on the input weights
-            loss.backward()
-            optimizer.step()
+    for epoch in range(n_epoch+1):
+        optimizer.zero_grad()
+        # Run the model from N randomly selected data points
+        # Random sampling
+        idxs = torch.randint(0, train_data[gpu].shape[0], (n_points,))
+        starts = train_data[gpu][idxs]
+        y = node_model(starts)
+        pV = y[:,0,None]
+        pVar = y[:,1,None]
+        velocity = train_V[gpu][idxs, model_idx][:,None]
+        variance = train_V_var[gpu][idxs, model_idx][:,None]
+        # Compute the loss between the predicted and true velocity vectors
+        mean_loss = mse(pV, velocity)
+        var_loss = mse(pVar, variance)
+        l1 = node_model.group_l1.mean()
+        loss = mean_loss + var_loss + l1*l1_alpha
+        # Compute the L1 penalty on the input weights
+        loss.backward()
+        optimizer.step()
 
-            # Every N steps calculate the validation loss
-            if epoch % checkpoint_interval == 0:
-                if iteration == 0:
-                    rewind_checkpoints[epoch] = deepcopy(node_model.state_dict())
-                
-                # Run the model on the validation set
-                val_y = node_model(val_data[gpu])
-                val_pV = val_y[:,0,None]
-                val_pVar = val_y[:,1,None]
-                val_mean_loss = mse(val_pV, val_V[gpu][:,model_idx][:,None])
-                val_var_loss = mse(val_pVar, val_V_var[gpu][:,model_idx][:,None])
-                val_loss = val_mean_loss + val_var_loss + l1*l1_alpha
-                
-                loss_queue.append(val_loss.item())
-                pct_var = np.std(loss_queue)/np.mean(loss_queue)
-        
-                active_inputs = int((node_model.group_l1 > 0).sum())
+        # Every N steps calculate the validation loss
+        if epoch % checkpoint_interval == 0:
+            # Run the model on the validation set
+            val_y = node_model(val_data[gpu])
+            val_pV = val_y[:,0,None]
+            val_pVar = val_y[:,1,None]
+            val_mean_loss = mse(val_pV, val_V[gpu][:,model_idx][:,None])
+            val_var_loss = mse(val_pVar, val_V_var[gpu][:,model_idx][:,None])
+            val_loss = val_mean_loss + val_var_loss + l1*l1_alpha
+            
+            loss_queue.append(val_loss.item())
+            pct_var = np.std(loss_queue)/np.mean(loss_queue)
+    
+            active_inputs = int((node_model.group_l1 > 0).sum())
 
-                logline = {
-                    'epoch':           epoch,
-                    'train_loss':      loss.item(),
-                    'train_var_loss':  var_loss.item(),
-                    'val_mean_loss':   val_mean_loss.item(),
-                    'val_var_loss':    val_var_loss.item(),
-                    'l1_loss':         l1.item(),
-                    'active_inputs':   active_inputs,
-                    'pct_var':         pct_var,
-                    'l1_alpha':        l1_alpha,
-                }
-                logfile.write(json.dumps(logline) + '\n')
-                # We have enough losses in the queue to evaluate the stopping criteria
-                accumulated_losses = len(loss_queue) == loss_accumulation
-                # If its the first round or we've pruned some inputs
-                pruned_or_first = (iteration == 0 or active_inputs < num_nodes)
-                # If the validation loss has not changed by more than the threshold
-                no_change = abs(pct_var) < delta_loss_threshold
-                conditions = [accumulated_losses, pruned_or_first, no_change]
-                if all(conditions):
-                    break
-        logline = {
-            'iteration': iteration,
-            'l1_alpha': l1_alpha,
-            'val_mean_loss':   val_mean_loss.item(),
-            'val_var_loss':    val_var_loss.item(),
-            'active_inputs': active_inputs,
-        }
-        logfile.write(json.dumps(logline) + '\n')
-        if iteration == 0:
-            rewind_epoch = (int(epoch * .05) // checkpoint_interval) * checkpoint_interval
-            rewind_epoch = max(rewind_epoch, checkpoint_interval)
-            rewind_checkpoint = rewind_checkpoints[rewind_epoch]
+            logline = {
+                'epoch':           epoch,
+                'train_loss':      loss.item(),
+                'train_var_loss':  var_loss.item(),
+                'val_mean_loss':   val_mean_loss.item(),
+                'val_var_loss':    val_var_loss.item(),
+                'l1_loss':         l1.item(),
+                'active_inputs':   active_inputs,
+                'pct_var':         pct_var,
+                'l1_alpha':        l1_alpha,
+            }
+            logfile.write(json.dumps(logline) + '\n')
+            # We have enough losses in the queue to evaluate the stopping criteria
+            accumulated_losses = len(loss_queue) == loss_accumulation
+            # If its the first round or we've pruned some inputs
+            pruned_or_first = (active_inputs < num_nodes)
+            # If the validation loss has not changed by more than the threshold
+            no_change = abs(pct_var) < delta_loss_threshold
+            conditions = [accumulated_losses, pruned_or_first, no_change]
+            if all(conditions):
+                break
+    logline = {
+        'l1_alpha': l1_alpha,
+        'val_mean_loss':   val_mean_loss.item(),
+        'val_var_loss':    val_var_loss.item(),
+        'active_inputs': active_inputs,
+    }
+    logfile.write(json.dumps(logline) + '\n')
 
-        models.append(deepcopy(node_model.state_dict()))
-        node_model.load_state_dict(rewind_checkpoint)
+    return deepcopy(node_model.state_dict())
 
-
-    return models
-
-# %%
+#%%
 # model_idx = 0
-# %%
-# model_idx += 1
-# nms = train(model_idx, 0, list(np.linspace(.01, .6, 6)) + [100.0])
+#%%
+# model_idx = 1
+# paramset = {'l1_alpha': 0.7, 'hidden_dim': 32, 'model_idx': 1}
+# nms = train(0, paramset, 0)
 
 #%%
 gpu_parallel = 5
 
 trained_models = {}
 # Start with zero penalty, then increase, then finish with very high penalty to induce total pruning
-l1_alphas = [.6] #[0.0] + list(np.linspace(.01, .6, 6)) + [100.0]
-note = '''Trained with group L1 penalty, pruned during training.'''
-params = {
-    'l1_alphas': l1_alphas,
-    'prune_type': 'Group L1 penalty, pruned during training',
-    'weight_penalty': 'l1',
-    'note': note,
-}
-pickle.dump(params, open(f'{outdir}/params/group_l1_variance_model_{genotype}.pickle', 'wb'))
+l1_alphas = [0.0] + list(np.linspace(.01, 1.0, 10)) + [100.0]
+hidden_dims = [4,8,16,32,64,128]
+model_idxs = list(range(num_nodes))
+import itertools
+# Make a list of dictionaries with all combinations of hyperparameters with their name
+hyperparams = [{'l1_alpha': l1_alpha, 'hidden_dim': hidden_dim, 'model_idx': model_idx} 
+               for l1_alpha, hidden_dim, model_idx 
+               in itertools.product(l1_alphas, hidden_dims, model_idxs)]
+
+pickle.dump(hyperparams, open(f'{outdir}/params.pickle', 'wb'))
 parallel = Parallel(n_jobs=num_gpus*gpu_parallel)
-trained_models = parallel(delayed(train)(i, i%num_gpus, params['l1_alphas'])
-                          for i in range(num_nodes))
+trained_models = parallel(delayed(train)(i, paramset, i%num_gpus)
+                          for i,paramset in enumerate(hyperparams))
 
 model_filename = f'{outdir}/models/group_l1_variance_model_{genotype}.pickle'
 with open(model_filename, 'wb') as model_file:
