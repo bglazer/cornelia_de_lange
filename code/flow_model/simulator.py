@@ -1,61 +1,69 @@
+import scipy
 import numpy as np
 import torch
-from sklearn.neighbors import KDTree
+from scipy.spatial import KDTree
 from joblib import Parallel, delayed
 from tqdm import tqdm
 
 class Simulator():
-    def __init__(self, model, X):
+    def __init__(self, model, X, device):
         self.model = model
-        print('Building KDTree')
-        self.tree = KDTree(X, leaf_size=100)
-        print('Querying KDTree')
-        self.nearest_neighb_dists = self.tree.query(X, k=2)[0][:,1]
-        self.max_distance = np.percentile(self.nearest_neighb_dists, 99)
+        self.device = device
+        print('Finding max distance')
+        d = torch.cdist(X, X).flatten()
+        l = d.shape[0]
+        q_idx = int(l*.95)
+        d_sorted = torch.sort(d)[0]
+        q = d_sorted[q_idx]
+        self.max_distance = q
+        self.X = X
 
     def euler_step(self, x, dt):
         with torch.no_grad():
             dx, var = self.model(x)
             var[var < 0] = 0
             std = torch.sqrt(var)
-            inside = np.zeros(x.shape[0], dtype=bool)
-            noise = torch.zeros_like(x)
+            inside = torch.zeros(x.shape[0], dtype=torch.bool, device=self.device)
+            nearest_idxs = torch.zeros(x.shape[0], dtype=torch.long, device=self.device)
+            noise = torch.zeros_like(x, device=self.device)
             while True:
                 num_outside = (~inside).sum()
-                noise[~inside] = torch.randn(num_outside, noise.shape[1]) * std[~inside]
+                # Generate samples from a standard normal distribution
+                r = torch.randn(num_outside, noise.shape[1], device=self.device)
+                # Scale by the predicted standard deviation
+                noise[~inside] = r * std[~inside]
                 #*****************************
                 # TODO why is this negative?
                 #*****************************
                 x1 = x - dt*(dx+noise)
-                dist, _ = self.tree.query(x1[~inside], k=2)
-                inside_query = dist[:,1] < self.max_distance
+                # Find the nearest neighbor of the points not on the interior
+                dist, idxs = torch.sort(torch.cdist(x1[~inside], self.X), dim=1)
+                closest = dist[:,1]
+                nearest_idxs[~inside] = idxs[:,1]
+                inside_query = closest < self.max_distance
+                # Update the index of points on the interior
                 inside[~inside] = inside_query
-                if np.all(inside):
+                if torch.all(inside):
                     break
                 
-            return x1
+            return x1, nearest_idxs
 
-    def simulate(self, x, t_span, knockout_idx=None):
+    def simulate(self, start_idxs, t_span, knockout_idx=None):
+        x = self.X[start_idxs,:].to(self.device)
         last_t = t_span[0]
-        traj = torch.zeros(len(t_span), x.shape[0], x.shape[1])
+        traj = torch.zeros(len(t_span), x.shape[0], x.shape[1], device=self.device)
         traj[0,:,:] = x.clone()
+        nearest_idxs = torch.zeros(len(t_span), x.shape[0], dtype=torch.long, device=self.device)
+        nearest_idxs[0,:] = start_idxs
         if knockout_idx is not None:
             traj[0,:,knockout_idx] = 0.0
         for i,t in tqdm(enumerate(t_span[1:]), total=len(t_span)-1):
             dt = t - last_t
-            traj[i+1] = self.euler_step(traj[i], dt)
+            x, idxs = self.euler_step(traj[i], dt)
+            traj[i+1,:,:] = x
+            nearest_idxs[i+1,:] = idxs
             if knockout_idx is not None:
                 traj[i+1,:,knockout_idx] = 0.0
             last_t = t
-        return traj
+        return traj, nearest_idxs
 
-    def trajectory(self, x, t_span, knockout_idx, n_repeats=1, n_parallel=1):
-        with torch.no_grad():
-            x = x.clone()
-            parallel = Parallel(n_jobs=n_parallel, verbose=0)
-            jobs = []
-            for j in range(n_repeats):
-                jobs.append(delayed(self.simulate)(x, t_span, knockout_idx))
-            trajectories = parallel(jobs)
-            traj = torch.concatenate(trajectories, dim=1)
-            return traj
