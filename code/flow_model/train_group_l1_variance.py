@@ -26,7 +26,7 @@ start_tmstp = datetime.now().timestamp()
 sys.path.append('..')
 from util import velocity_vectors, is_notebook
 #%%
-genotype='wildtype'
+genotype='mutant'
 dataset = 'net'
 
 #%% 
