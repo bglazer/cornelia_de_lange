@@ -26,7 +26,7 @@ def distribution(trajectories, pca):
         
 #%%
 # Plot a sample of the individual trajectories
-def sample_trajectories(trajectories, X, pca, genotype):
+def sample_trajectories(trajectories, X, pca, label):
     # Get a 4x4 grid of plots
     nrow = 3
     ncol = 3
@@ -47,15 +47,16 @@ def sample_trajectories(trajectories, X, pca, genotype):
         # Remove the axis labels
         ax.set_xticks([])
         ax.set_yticks([])
-    fig.suptitle(f'{genotype.capitalize()} sampled trajectories', fontsize=30)
+    fig.suptitle(f'{label.capitalize()} sampled trajectories', fontsize=30)
     plt.tight_layout()
     plt.subplots_adjust(top=0.95)
 
-def arrow_grid(data, pca, model, genotype, device, knockout_idx=None):
+def arrow_grid(data, pca, model, label, device, knockout_idx=None):
     X = data.X.toarray()
+    # Compute the projection of gene expression onto the first two principal components
     proj = np.array(pca.transform(X))[:,0:2]
     X = torch.tensor(X, device=device).float()
-    # Find the extent of the scatter plot
+    # Find the extents of the projection
     minX = np.min(proj[:,0])
     maxX = np.max(proj[:,0])
     minY = np.min(proj[:,1])
@@ -68,10 +69,16 @@ def arrow_grid(data, pca, model, genotype, device, knockout_idx=None):
     n_points = 20
     x_grid_points = np.linspace(minX, maxX, n_points)
     y_grid_points = np.linspace(minY, maxY, n_points)
+    # Find the width and height of each grid cell
     x_spacing = x_grid_points[1] - x_grid_points[0]
     y_spacing = y_grid_points[1] - y_grid_points[0]
+    # This creates a sequential list of points defining the upper left corner of each grid cell
     grid = np.array(np.meshgrid(x_grid_points, y_grid_points)).T.reshape(-1,2)
+    # Set up a list of velocities for each grid cell
     velocity_grid = np.zeros_like(grid)
+    # This is nan, rather than zero so that we can distinguish between
+    # grid cells with zero velocity and grid cells with 
+    # no points inside, which wil be (nan)
     velocity_grid[:] = np.nan
 
     # Find points inside each grid cell
@@ -81,9 +88,11 @@ def arrow_grid(data, pca, model, genotype, device, knockout_idx=None):
     if knockout_idx is not None:
         X[:,knockout_idx] = 0.0
 
+    # Run the model on every data point
     with torch.no_grad():
         x = X.clone()
         if knockout_idx is not None:
+            # If we specified a gene to knock out, set the expression of that gene to zero
             x[:,knockout_idx] = 0.0
         velos, vars = model(x)
 
@@ -97,11 +106,14 @@ def arrow_grid(data, pca, model, genotype, device, knockout_idx=None):
             # inside the grid cell
             velo = velos[idx,:]
             var = vars[idx,:]
+            # Set the knockout gene velocity to zero
             if knockout_idx is not None:
                 velo[:,knockout_idx] = 0.0
+            # Compute the mean velocity vector of the points inside the grid cell
             velocities[i] = velo.mean(axis=0).reshape(-1)
             variances[i] = var.mean(axis=0).reshape(-1)
             grid_means[i] = X[idx,:].mean(axis=0)
+    # util.tonp(x) does x.cpu().numpy() if x is a torch tensor
     velocities = util.tonp(velocities)
     variances = util.tonp(variances)
     pca_embed = lambda x: np.array(pca.transform(x)[:,0:2])
@@ -137,7 +149,7 @@ def arrow_grid(data, pca, model, genotype, device, knockout_idx=None):
     ax.set_yticks([])
     ax.set_xlabel('PC1')
     ax.set_ylabel('PC2')
-    ax.set_title(f'{genotype.capitalize()}', fontsize=14);
+    ax.set_title(f'{label.capitalize()}', fontsize=14);
 
 def cell_type_proportions(trajectories, data, nearest_idxs, genotype):
     # Plot the proportion of each cell type in the trajectories
@@ -162,3 +174,4 @@ def cell_type_proportions(trajectories, data, nearest_idxs, genotype):
     # Label the y-axis with the cell type names
     plt.yticks(range(num_cell_types), cell_types);
     plt.title(f'{genotype.capitalize()} cell type proportion in trajectories')
+    return cell_type_trajectories

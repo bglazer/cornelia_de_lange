@@ -1,8 +1,4 @@
-import scipy
-import numpy as np
 import torch
-from scipy.spatial import KDTree
-from joblib import Parallel, delayed
 from tqdm import tqdm
 
 class Simulator():
@@ -10,15 +6,17 @@ class Simulator():
         self.model = model
         self.device = device
         print('Finding max distance')
-        d = torch.cdist(X, X).flatten()
+        dist, idxs = torch.sort(torch.cdist(X, X), dim=1)
+        closest = dist[:,1] 
+        d = closest.flatten()
         l = d.shape[0]
-        q_idx = int(l*.95)
+        q_idx = int(l*.99)
         d_sorted = torch.sort(d)[0]
         q = d_sorted[q_idx]
         self.max_distance = q
         self.X = X
 
-    def euler_step(self, x, dt):
+    def euler_step(self, x, dt, noise_scale):
         with torch.no_grad():
             dx, var = self.model(x)
             var[var < 0] = 0
@@ -31,11 +29,12 @@ class Simulator():
                 # Generate samples from a standard normal distribution
                 r = torch.randn(num_outside, noise.shape[1], device=self.device)
                 # Scale by the predicted standard deviation
-                noise[~inside] = r * std[~inside]
+                noise[~inside] = r * std[~inside] * noise_scale
                 #*****************************
                 # TODO why is this negative?
                 #*****************************
                 x1 = x - dt*(dx+noise)
+                x1 = torch.clamp(x1, min=0.0)
                 # Find the nearest neighbor of the points not on the interior
                 dist, idxs = torch.sort(torch.cdist(x1[~inside], self.X), dim=1)
                 closest = dist[:,1]
@@ -48,7 +47,7 @@ class Simulator():
                 
             return x1, nearest_idxs
 
-    def simulate(self, start_idxs, t_span, knockout_idx=None):
+    def simulate(self, start_idxs, t_span, noise_scale=1.0, knockout_idx=None):
         x = self.X[start_idxs,:].to(self.device)
         last_t = t_span[0]
         traj = torch.zeros(len(t_span), x.shape[0], x.shape[1], device=self.device)
@@ -59,7 +58,7 @@ class Simulator():
             traj[0,:,knockout_idx] = 0.0
         for i,t in tqdm(enumerate(t_span[1:]), total=len(t_span)-1):
             dt = t - last_t
-            x, idxs = self.euler_step(traj[i], dt)
+            x, idxs = self.euler_step(traj[i], dt, noise_scale)
             traj[i+1,:,:] = x
             nearest_idxs[i+1,:] = idxs
             if knockout_idx is not None:
