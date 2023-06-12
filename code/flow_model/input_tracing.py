@@ -20,7 +20,7 @@ np.random.seed(0)
 torch.manual_seed(0)
 
 #%%
-tmstp = '20230526_105500'  
+tmstp = '20230607_165324'  
 genotype = 'wildtype'
 outdir = f'../../output/{tmstp}'
 #%%
@@ -199,7 +199,8 @@ for model_idx in active_idxs:
             shortest_path_lens[target][source] = len(paths[0])
         except nx.NetworkXNoPath:
             pass
-
+#%%
+pickle.dump(shortest_paths, open(f'{outdir}/shortest_paths_{genotype}.pickle', 'wb'))
 #%%
 # Generate shortest paths from *randomly selected* inputs
 def generate_random_shortest_paths(model_idx):
@@ -225,7 +226,7 @@ random_shortest_paths = dict(random_shortest_paths)
 path_node_pvals = {}
 for target in tqdm(shortest_paths):
     all_path_nodes = Counter()
-
+    # Compute the observed probability of seeing each node in the shortest paths
     for path in shortest_paths[target]:
         for node in path[1:-1]:
             all_path_nodes[node] += 1
@@ -258,12 +259,29 @@ pickle.dump(path_node_pvals, open(f'{outdir}/shortest_path_node_pvalues_{genotyp
 #%%
 # Find the genes that are most commonly overrepresented in the shortest paths
 # versus the random shortest paths
+all_path_node_pct_diffs = []
+# Across all targets and nodes, find the 99th percentile of the difference in the
+# percentage of times a node is in the observed shortest paths versus 
+# the shortest paths from random nodes (null model)
+for dest in path_node_pvals:
+    for path_node in path_node_pvals[dest]:
+        observed_pct, random_pct = path_node_pvals[dest][path_node]
+        all_path_node_pct_diffs.append(observed_pct - random_pct)
+all_path_node_pct_diffs = np.array(all_path_node_pct_diffs)
+pct_diff_threshold = np.percentile(all_path_node_pct_diffs, 90)
+
+# Find the nodes that are most overrepresented in the shortest paths
 overrepresented_nodes = Counter()
+overrepresented_node_paths = {}
 for target in path_node_pvals:
     for node in path_node_pvals[target]:
         p, random_p = path_node_pvals[target][node]
-        if p > random_p:
+        if p - random_p > pct_diff_threshold:
             overrepresented_nodes[node] += 1
+            if node not in overrepresented_node_paths:
+                overrepresented_node_paths[node] = []
+            overrepresented_node_paths[node] += [path for path in shortest_paths[target]
+                                                 if node in path[1:-1]]
 
 #%%
 header = ["Idx", "Gene", "Count", "Mean_Rank", "Var_Rank"]
@@ -287,7 +305,7 @@ display(HTML(tabulate(table, tablefmt='html', headers=header)))
 #%%
 # Output the gene list as a pickle object
 pickle.dump(overrepresented_nodes, open(f'{outdir}/shortest_path_table_{genotype}.pickle', 'wb'))
-
+pickle.dump(overrepresented_node_paths, open(f'{outdir}/overrepresented_node_paths_{genotype}.pickle', 'wb'))
 
 # %%
 # for model_idx in shortest_paths:
