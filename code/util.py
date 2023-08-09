@@ -190,3 +190,41 @@ def sliding_window(iterable, n):
     for x in it:
         window.append(x)
         yield tuple(window)
+
+
+#%%
+import networkx as nx
+def create_path_graph(paths):
+    path_graph = nx.DiGraph()
+    for target in paths:
+        for path in paths[target]:
+            for i in range(len(path)-1):
+                src = path[i]
+                dst = path[i+1]
+                if src not in path_graph:
+                    path_graph.add_node(src)
+                if dst not in path_graph:
+                    path_graph.add_node(dst)
+                if path_graph.has_edge(src, dst):
+                    path_graph[src][dst]['weight'] += 1
+                else:
+                    path_graph.add_edge(src, dst, weight=1)
+    return path_graph
+
+import random
+
+def generate_random_shortest_paths(pvals, undirected_graph):
+    node_list = list(pvals.keys())
+    path_graph = nx.DiGraph()
+    random_shortest_paths = {node: [] for node in pvals}
+    for target in pvals:
+        num_sources = len([p for node, p in pvals[target].items() if p < .01])
+        random_sources = random.sample(node_list, k=num_sources)
+        for source in random_sources:
+            try:
+                paths = list(nx.all_shortest_paths(undirected_graph, source, target))
+                random_shortest_paths[target] += paths
+            except nx.NetworkXNoPath:
+                pass
+    path_graph = create_path_graph(random_shortest_paths)
+    return path_graph

@@ -121,7 +121,6 @@ def train(idx, params, gpu):
     l1_alpha = params['l1_alpha']
     hidden_dim = params['hidden_dim']
     model_idx = params['model_idx']
-    print(params)
 
     node_model = GroupL1MLP(num_nodes, 2, hidden_dim, num_layers).to(f'cuda:{gpu}')
     optimizer = torch.optim.Adam(node_model.parameters(), lr=5e-4)
@@ -205,8 +204,8 @@ gpu_parallel = 5
 
 trained_models = {}
 # Start with zero penalty, then increase, then finish with very high penalty to induce total pruning
-l1_alphas = [0.0] + list(np.linspace(.01, 1.0, 10)) + [100.0]
-hidden_dims = [4,8,16,32,64,128]
+l1_alphas = list(np.linspace(.9, 5.0, 10))
+hidden_dims = [16]
 model_idxs = list(range(num_nodes))
 import itertools
 # Make a list of dictionaries with all combinations of hyperparameters with their name
@@ -227,4 +226,4 @@ end_tmstp = datetime.now().timestamp()
 tmstp_diff = end_tmstp - start_tmstp
 # Format the time difference as number of hours, minutes, and seconds
 tmstp_diff = str(timedelta(seconds=tmstp_diff))
-print(f'Training time: {tmstp_diff}')
+print(f'Training time: {tmstp_diff}', flush=True)

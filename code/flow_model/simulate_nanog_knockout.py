@@ -10,13 +10,11 @@ import torch
 import sys
 sys.path.append('..')
 import util
-from util import tonp
 import numpy as np
 from sklearn.decomposition import PCA
 from simulator import Simulator
 from matplotlib import pyplot as plt
 import plotting
-from scipy import stats
 
 #%%
 # Set the random seed
@@ -24,17 +22,13 @@ np.random.seed(0)
 torch.manual_seed(0)
 
 # %%
-genotype = 'wildtype'
+genotype = 'mutant'
 data = sc.read_h5ad(f'../../data/{genotype}_net.h5ad')
 # %%
 # Load the models
-tmstp = '20230607_165324'
+tmstp = '20230608_093734'
 outdir = f'../../output/{tmstp}'
-state_dict = torch.load(f'{outdir}/models/optimal_wildtype.torch')
-
-# tmstp = '20230602_112554'
-# outdir = f'../../output/{tmstp}'
-# models = pickle.load(open(f'{outdir}/models/group_l1_variance_model_mutant.pickle', 'rb'))
+state_dict = torch.load(f'{outdir}/models/optimal_{genotype}.torch')
 
 # %%
 X = torch.tensor(data.X.toarray()).float()
@@ -72,17 +66,16 @@ model = model.to(device)
 X = X.to(device)
 simulator = Simulator(model, X, device=device)
 #%%
-knockout_gene = 'MESP1'
+knockout_gene = 'NANOG'
 knockout_idx = data.var.index.get_loc(knockout_gene)
-perturbation = (knockout_idx, 0.0)
 n_repeats = 10
-len_trajectory = 98
-n_steps = len_trajectory*4
+len_trajectory = 250
+n_steps = 250*4
 noise_scale = 1.0
 t_span = torch.linspace(0, len_trajectory, n_steps, device=device)
 repeats = torch.tensor(start_idxs.repeat(n_repeats)).to(device)
 ko_trajectories, ko_nearest_idxs = simulator.simulate(repeats, t_span, 
-                                                      perturbation=perturbation, 
+                                                      perturbation=(knockout_idx, 0.0), 
                                                       noise_scale=noise_scale)
 wt_trajectories, wt_nearest_idxs = simulator.simulate(repeats, t_span, 
                                                       perturbation=None, 
@@ -98,50 +91,58 @@ plotting.distribution(ko_trajectories_np, pca, 'MESP1 Knockout')
 #%%
 plotting.distribution(wt_trajectories_np, pca, 'Wildtype')
 # %%
-wt_velos = tonp(plotting.compute_velo(model, X)[0])
-mut_velos = tonp(plotting.compute_velo(model, X, perturbation=perturbation)[0])
-velos = (wt_velos, mut_velos)
-plotting.arrow_grid(velos, [data]*2, pca, ('Wildtype', 'MESP1 Knockout'))
+plotting.arrow_grid(data, pca, model, 'MESP1 Knockout', 
+                    perturbation=(knockout_idx,0.0), device=device)
+#%%
+plotting.arrow_grid(data, pca, model, 'Wildtype', perturbation=None, device=device)
 # %%
 plotting.sample_trajectories(ko_trajectories_np, Xnp, pca, 'MESP1 Knockout')
 #%%
 plotting.sample_trajectories(wt_trajectories_np, Xnp, pca, 'Wildtype')
 
-#%%
-trajectories = plotting.compare_cell_type_trajectories(nearest_idxs=(ko_idxs_np, wt_idxs_np), 
-                                                       data=[data]*2, 
-                                                       cell_type_to_idx=cell_types,
-                                                       labels=('MESP1 Knockout', 'Wildtype'))
+# %%
+trajectories = plotting.compare_cell_type_trajectories(np.stack((wt_idxs_np,ko_idxs_np )), 
+                                                       data, ('Wildtype','MESP1 Knockout'))
 ko_cell_type_traj = trajectories[0]
 wt_cell_type_traj = trajectories[1]
 # %%
-n_cells = (len(start_idxs) * n_repeats * n_steps)
-wt_cell_proportions = wt_cell_type_traj.sum(axis=1) / n_cells
-ko_cell_proportions = ko_cell_type_traj.sum(axis=1) / n_cells
-plotting.cell_type_proportions(proportions=(wt_cell_proportions, ko_cell_proportions), 
-                               cell_types=cell_types, 
-                               labels=['Wildtype', 'MESP1 Knockout'])
+wt_total_cell_types = wt_cell_type_traj.sum(axis=1)/wt_cell_type_traj.sum()
+ko_total_cell_types = ko_cell_type_traj.sum(axis=1)/ko_cell_type_traj.sum()
+# Plot side by side bar charts of the cell type proportions
+plt.bar(np.arange(len(wt_total_cell_types))+.2, wt_total_cell_types, label='Wildtype', width=.4)
+plt.bar(np.arange(len(ko_total_cell_types))-.2, ko_total_cell_types, label='Knockout', width=.4)
+plt.xticks(np.arange(len(wt_total_cell_types)), data.obs['cell_type'].cat.categories, rotation=90);
+plt.ylabel('Proportion of cells')
+plt.legend()
 #%%
 # Recreating Fig 2E from https://www.science.org/doi/10.1126/science.aao4174
 genes = ['NANOG', 'SNAI1']
 fig, axs = plt.subplots(nrows=len(genes), ncols=1, figsize=(5, len(genes)*5))
 for i,gene in enumerate(genes):
     gene_idx = data.var.index.get_loc(gene)
-    wt_expr = wt_trajectories_np[:,:,gene_idx].flatten()
-    ko_expr = ko_trajectories_np[:,:,gene_idx].flatten()
-    axs[i].violinplot([wt_expr, ko_expr], showmeans=True)
+    # plt.scatter(proj[:,0], proj[:,1], s=nanog*20+1, alpha=.5, c=nanog)
+    wt_nanog = wt_trajectories_np[:][:,:,gene_idx].flatten()
+    ko_nanog = ko_trajectories_np[:][:,:,gene_idx].flatten()
+    axs[i].violinplot([wt_nanog, ko_nanog], showmeans=True)
     axs[i].set_xticks([1,2], ['Wildtype', 'Knockout'])
-    axs[i].set_ylabel('Expression')
+    axs[i].set_ylabel(gene)
 
 # %%
-fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(10, 5))
-gene_idx = data.var.index.get_loc('NANOG')
-wt_expr = wt_trajectories_np[:,:,gene_idx].flatten()
-ko_expr = ko_trajectories_np[:,:,gene_idx].flatten()
-# Make a scatter plot of the trajectory with NANOG expression as the color
-wt_traj_proj = pca.transform(wt_trajectories_np.reshape(-1, wt_trajectories_np.shape[2]))
-ko_traj_proj = pca.transform(ko_trajectories_np.reshape(-1, ko_trajectories_np.shape[2]))
-axs[0].scatter(wt_traj_proj[:,0], wt_traj_proj[:,1], c=wt_expr, cmap='viridis', s=wt_expr*20+.1)
-axs[0].set_title('Wildtype')
-axs[1].scatter(ko_traj_proj[:,0], ko_traj_proj[:,1], c=ko_expr, cmap='viridis', s=ko_expr*20+.1)
-axs[1].set_title('MESP1 Knockout');
+# Plot WT vs Mutant Nanog expression
+wt_data = sc.read_h5ad(f'../../data/wildtype_net.h5ad')
+mut_data = sc.read_h5ad(f'../../data/mutant_net.h5ad')
+fig, axs = plt.subplots(nrows=1, ncols=1, figsize=(10,5))
+nanog_idx = data.var.index.get_loc('NANOG')
+wt_nanog = wt_data.X[:,nanog_idx].toarray().flatten()
+mut_nanog = mut_data.X[:,nanog_idx].toarray().flatten()
+wt_nanog_gt_zero = wt_nanog[wt_nanog>0]
+mut_nanog_gt_zero = mut_nanog[mut_nanog>0]
+_, bins, _ = axs.hist(wt_nanog_gt_zero, bins=100, alpha=.2, label='Wildtype')
+axs.hist(mut_nanog_gt_zero, bins=bins, alpha=.2, label='Mutant')
+axs.set_xlabel('Nanog Expression')
+axs.set_ylabel('Number of cells')
+axs.legend()
+
+#%%
+
+# %%

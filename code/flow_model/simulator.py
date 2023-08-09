@@ -16,7 +16,7 @@ class Simulator():
         self.max_distance = q
         self.X = X
 
-    def euler_step(self, x, dt, noise_scale):
+    def euler_step(self, x, dt, noise_scale, boundary=True):
         with torch.no_grad():
             dx, var = self.model(x)
             var[var < 0] = 0
@@ -42,27 +42,29 @@ class Simulator():
                 inside_query = closest < self.max_distance
                 # Update the index of points on the interior
                 inside[~inside] = inside_query
-                if torch.all(inside):
+                if torch.all(inside) or (not boundary):
                     break
                 
             return x1, nearest_idxs
 
-    def simulate(self, start_idxs, t_span, noise_scale=1.0, knockout_idx=None):
-        x = self.X[start_idxs,:].to(self.device)
-        last_t = t_span[0]
-        traj = torch.zeros(len(t_span), x.shape[0], x.shape[1], device=self.device)
-        traj[0,:,:] = x.clone()
-        nearest_idxs = torch.zeros(len(t_span), x.shape[0], dtype=torch.long, device=self.device)
-        nearest_idxs[0,:] = start_idxs
-        if knockout_idx is not None:
-            traj[0,:,knockout_idx] = 0.0
-        for i,t in tqdm(enumerate(t_span[1:]), total=len(t_span)-1):
-            dt = t - last_t
-            x, idxs = self.euler_step(traj[i], dt, noise_scale)
-            traj[i+1,:,:] = x
-            nearest_idxs[i+1,:] = idxs
-            if knockout_idx is not None:
-                traj[i+1,:,knockout_idx] = 0.0
-            last_t = t
-        return traj, nearest_idxs
+    def simulate(self, start_idxs, t_span, noise_scale=1.0, perturbation=None, boundary=True, show_progress=True):
+        with torch.no_grad():
+            x = self.X[start_idxs,:].to(self.device)
+            last_t = t_span[0]
+            traj = torch.zeros(len(t_span), x.shape[0], x.shape[1], device=self.device)
+            traj[0,:,:] = x.clone()
+            nearest_idxs = torch.zeros(len(t_span), x.shape[0], dtype=torch.long, device=self.device)
+            nearest_idxs[0,:] = start_idxs
+            if perturbation is not None:
+                perturb_idx, perturb_val = perturbation
+                traj[0,:,perturb_idx] = perturb_val
+            for i,t in tqdm(enumerate(t_span[1:]), total=len(t_span)-1, disable=(not show_progress)):
+                dt = t - last_t
+                x, idxs = self.euler_step(traj[i], dt, noise_scale, boundary=boundary)
+                traj[i+1,:,:] = x
+                nearest_idxs[i+1,:] = idxs
+                if perturbation is not None:
+                    traj[i+1,:,perturb_idx] = perturb_val
+                last_t = t
+            return traj, nearest_idxs
 

@@ -24,7 +24,7 @@ start_tmstp = datetime.now().timestamp()
 sys.path.append('..')
 from util import velocity_vectors, is_notebook
 #%%
-genotype='mutant'
+genotype= 'mutant'
 dataset = 'net'
 
 #%% 
@@ -59,7 +59,10 @@ X = adata.X.toarray()
 T = adata.obsm['transition_matrix']
 
 V = velocity_vectors(T, X)
-
+V_vars = np.zeros_like(V)
+for i in range(V.shape[0]):
+    V_vars[i] = np.var(X[T[i].indices], axis=0)
+V_vars[np.isnan(V_vars)] = 0.0
 #%%
 pct_train = 0.8
 n_train = int(pct_train*X.shape[0])
@@ -70,12 +73,16 @@ X_train = X[train_idxs]
 X_val = X[val_idxs]
 V_train = V[train_idxs]
 V_val = V[val_idxs]
+V_var_train = V_vars[train_idxs]
+V_var_val = V_vars[val_idxs]
 
 num_gpus = 4
 train_data = [torch.tensor(X_train).to(torch.float32).to(f'cuda:{i}') for i in range(num_gpus)]
 val_data = [torch.tensor(X_val).to(torch.float32).to(f'cuda:{i}') for i in range(num_gpus)]
 train_V = [torch.tensor(V_train).to(torch.float32).to(f'cuda:{i}') for i in range(num_gpus)]
 val_V = [torch.tensor(V_val).to(torch.float32).to(f'cuda:{i}') for i in range(num_gpus)]
+train_V_var = [torch.tensor(V_var_train).to(torch.float32).to(f'cuda:{i}') for i in range(num_gpus)]
+val_V_var = [torch.tensor(V_var_val).to(torch.float32).to(f'cuda:{i}') for i in range(num_gpus)]
 
 #%%
 mse = torch.nn.MSELoss(reduction='mean')
@@ -92,20 +99,21 @@ delta_loss_threshold = 5e-3
 # Average over the last N validation losses
 loss_accumulation = 5
 num_nodes = X.shape[1]
-hidden_dim = 32
+hidden_dim = 64
 num_layers = 3
 checkpoint_interval = 10
 # NOTE: The l1_alpha and the learning rate are manually set based on the results
-# of hyperparameter tuning done in train_group_pruned_l1_flow_model.py
-l1_alpha = 0.6
+# of hyperparameter tuning done in train_group_l1_variance.py
+l1_alpha = 1.0
 lr = 5e-4
 
 model = GroupL1FlowModel(input_dim=num_nodes, 
                          hidden_dim=hidden_dim, 
-                         num_layers=num_layers)
+                         num_layers=num_layers,
+                         predict_var=True)
 
 #%%
-def train(model_idx, gpu, l1_alpha, iterations):
+def train(model_idx, gpu, iterations):
     if is_notebook():
         logfile = sys.stdout
     else:
@@ -116,33 +124,43 @@ def train(model_idx, gpu, l1_alpha, iterations):
 
     for iteration in range(iterations):
         # Re-initialize the weights to different random values
+        l1_alpha = (torch.abs(torch.randn(1)*1.5+1)+.1).item()
         for layer in node_model.layers:
             if type(layer) is torch.nn.Linear:
                 layer.reset_parameters()
         torch.nn.init.ones_(node_model.group_l1)
         optimizer = torch.optim.Adam(node_model.parameters(), lr=lr)
         loss_queue = deque(maxlen=loss_accumulation)    
+        loss_queue = deque(maxlen=loss_accumulation)
         for epoch in range(n_epoch+1):
             optimizer.zero_grad()
             # Run the model from N randomly selected data points
             # Random sampling
             idxs = torch.randint(0, train_data[gpu].shape[0], (n_points,))
             starts = train_data[gpu][idxs]
-            pV = node_model(starts)
+            y = node_model(starts)
+            pV = y[:,0,None]
+            pVar = y[:,1,None]
             velocity = train_V[gpu][idxs, model_idx][:,None]
+            variance = train_V_var[gpu][idxs, model_idx][:,None]
             # Compute the loss between the predicted and true velocity vectors
-            loss = mse(pV, velocity)
+            mean_loss = mse(pV, velocity)
+            var_loss = mse(pVar, variance)
             l1 = node_model.group_l1.mean()
-            total = loss + l1*l1_alpha
+            loss = mean_loss + var_loss + l1*l1_alpha
             # Compute the L1 penalty on the input weights
-            total.backward()
+            loss.backward()
             optimizer.step()
 
             # Every N steps calculate the validation loss
             if epoch % checkpoint_interval == 0:
                 # Run the model on the validation set
-                val_pV = node_model(val_data[gpu])
-                val_loss = mse(val_pV, val_V[gpu][:,model_idx][:,None])
+                val_y = node_model(val_data[gpu])
+                val_pV = val_y[:,0,None]
+                val_pVar = val_y[:,1,None]
+                val_mean_loss = mse(val_pV, val_V[gpu][:,model_idx][:,None])
+                val_var_loss = mse(val_pVar, val_V_var[gpu][:,model_idx][:,None])
+                val_loss = val_mean_loss + val_var_loss + l1*l1_alpha
                 
                 loss_queue.append(val_loss.item())
                 pct_var = np.std(loss_queue)/np.mean(loss_queue)
@@ -152,7 +170,10 @@ def train(model_idx, gpu, l1_alpha, iterations):
                 logline = {
                     'epoch':           epoch,
                     'train_loss':      loss.item(),
-                    'validation_loss': val_loss.item(),
+                    'train_var_loss':  var_loss.item(),
+                    'val_mean_loss':   val_mean_loss.item(),
+                    'val_var_loss':    val_var_loss.item(),
+                    'l1_loss':         l1.item(),
                     'active_inputs':   active_inputs,
                     'pct_var':         pct_var,
                     'l1_alpha':        l1_alpha,
@@ -168,13 +189,13 @@ def train(model_idx, gpu, l1_alpha, iterations):
                 if all(conditions):
                     break
         logline = {
-            'iteration': iteration,
             'l1_alpha': l1_alpha,
-            'validation_loss': val_loss.item(),
+            'val_mean_loss':   val_mean_loss.item(),
+            'val_var_loss':    val_var_loss.item(),
             'active_inputs': active_inputs,
         }
         logfile.write(json.dumps(logline) + '\n')
-
+        
         models.append(deepcopy(node_model.state_dict()))
 
     return models
@@ -189,10 +210,8 @@ def train(model_idx, gpu, l1_alpha, iterations):
 gpu_parallel = 5
 
 trained_models = {}
-# Start with zero penalty, then increase, then finish with very high penalty to induce total pruning
 note = \
-'''Retraining multiple times with different initializations to induce variance in the pruned inputs.
-Running on mutant '''
+'''Rerunning sampling again with higher penalty to induce more pruning. '''
 params = {
     'l1_alpha': l1_alpha,
     'prune_type': 'Group L1 penalty, pruned during training',
@@ -202,7 +221,7 @@ params = {
 }
 pickle.dump(params, open(f'{outdir}/params/resampled_group_l1_flow_model_{genotype}.pickle', 'wb'))
 parallel = Parallel(n_jobs=num_gpus*gpu_parallel)
-trained_models = parallel(delayed(train)(i, i%num_gpus, params['l1_alpha'], params['num_iterations'])
+trained_models = parallel(delayed(train)(i, i%num_gpus, params['num_iterations'])
                           for i in range(num_nodes))
 
 model_filename = f'{outdir}/models/resampled_group_l1_flow_models_{genotype}.pickle'
@@ -213,4 +232,4 @@ end_tmstp = datetime.now().timestamp()
 tmstp_diff = end_tmstp - start_tmstp
 # Format the time difference as number of hours, minutes, and seconds
 tmstp_diff = str(timedelta(seconds=tmstp_diff))
-print(f'Training time: {tmstp_diff}')
+print(f'Training time: {tmstp_diff}', flush=True)
