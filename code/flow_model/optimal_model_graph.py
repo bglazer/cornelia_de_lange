@@ -6,12 +6,12 @@ import networkx as nx
 from tqdm import tqdm
 
 #%%
-mut_tmstp = '20230608_093734'
+tmstp = '20230607_165324'
 
-genotype = 'mutant'
-mut = sc.read_h5ad(f'../../data/mutant_net.h5ad')
+genotype = 'wildtype'
+mut = sc.read_h5ad(f'../../data/{genotype}_net.h5ad')
 cell_types = {c:i for i,c in enumerate(set(mut.obs['cell_type']))}
-outdir = f'../../output/{mut_tmstp}'
+outdir = f'../../output/{tmstp}'
 #%%
 node_to_idx = pickle.load(open(f'../../data/protein_id_to_idx.pickle', 'rb'))
 idx_to_node = {idx: node for node, idx in node_to_idx.items()}
@@ -22,7 +22,7 @@ protein_id_name = {id: '/'.join(name) for id, name in protein_id_name.items()}
 
 #%%
 # Load the optimal model
-state_dict = torch.load(f'../../output/{mut_tmstp}/models/optimal_{genotype}.torch')
+state_dict = torch.load(f'../../output/{tmstp}/models/optimal_{genotype}.torch')
 # %%
 target_l1s = {}
 for key in state_dict.keys():
@@ -56,7 +56,7 @@ for target_gene, active_genes in target_active_genes.items():
 print(f'Number of connected components: {nx.number_weakly_connected_components(graph)}')
 # %%
 # Save the optimal model graph
-pickle.dump(graph, open(f'../../output/{mut_tmstp}/optimal_{genotype}_graph.pickle', 'wb'))
+pickle.dump(graph, open(f'../../output/{tmstp}/optimal_{genotype}_graph.pickle', 'wb'))
 # %%
 regulatory_graph = pickle.load(open(f'../../data/filtered_graph.pickle','rb'))
 #%%
@@ -85,7 +85,7 @@ for target in tqdm(node_to_idx):
             pass
 #%%
 # Save the all pairs shortest paths
-with open(f'../../output/{mut_tmstp}/all_shortest_paths.pickle', 'wb') as f:
+with open(f'../../output/{tmstp}/all_shortest_paths.pickle', 'wb') as f:
     pickle.dump(all_shortest_paths, f)
 #%%
 # Create an optimal model shortest paths graph
@@ -95,8 +95,8 @@ for target, paths in shortest_paths.items():
         nx.add_path(optimal_model_shortest_paths_graph, path)
 # %%
 # Save the optimal model shortest paths graph and the shortest paths dictionary
-pickle.dump(optimal_model_shortest_paths_graph, open(f'../../output/{mut_tmstp}/optimal_{genotype}_shortest_paths_graph.pickle', 'wb'))
-pickle.dump(shortest_paths, open(f'../../output/{mut_tmstp}/optimal_{genotype}_shortest_paths.pickle', 'wb'))
+pickle.dump(optimal_model_shortest_paths_graph, open(f'../../output/{tmstp}/optimal_{genotype}_shortest_paths_graph.pickle', 'wb'))
+pickle.dump(shortest_paths, open(f'../../output/{tmstp}/optimal_{genotype}_shortest_paths.pickle', 'wb'))
 
 
 # %%
