@@ -108,7 +108,7 @@ for mediator, targets in mediator_targets.items():
                     torch.zeros(len(targets), device=device))
 
     perturb_trajectories, perturb_nearest_idxs = simulator.simulate(repeats, t_span, 
-                                                                    perturbation=perturbation, 
+                                                                    node_perturbation=perturbation, 
                                                                     boundary=False)
 
     mediator_name = protein_id_name[mediator]
