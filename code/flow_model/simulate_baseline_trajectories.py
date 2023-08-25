@@ -26,10 +26,11 @@ mut_data = sc.read_h5ad(f'../../data/mutant_net.h5ad')
 
 # %%
 # Load the models
-tmstp = '20230608_093734'
-wt_outdir = f'../../output/{tmstp}'
-mut_outdir = f'../../output/{tmstp}'
-wt_state_dict = torch.load(f'{wt_outdir}/models/optimal_mutant.torch')
+wt_tmstp = '20230607_165324'
+wt_outdir = f'../../output/{wt_tmstp}'
+mut_tmstp = '20230608_093734'
+mut_outdir = f'../../output/{mut_tmstp}'
+wt_state_dict = torch.load(f'{wt_outdir}/models/optimal_wildtype.torch')
 mut_state_dict = torch.load(f'{mut_outdir}/models/optimal_mutant.torch')
 
 # %%
@@ -172,6 +173,6 @@ pickle.dump(mut_best_trajectories, open(f'{mut_outdir}/baseline_cell_type_trajec
 pickle.dump(wt_idxs_np[:n_steps[best_idx]], open(f'{wt_outdir}/baseline_nearest_cell_idxs_wildtype.pickle', 'wb'))
 pickle.dump(mut_idxs_np[:n_steps[best_idx]], open(f'{mut_outdir}/baseline_nearest_cell_idxs_mutant.pickle', 'wb'))
 # %%
-pickle.dump(wt_trajectories_np[:n_steps[best_idx]], open(f'{wt_outdir}/baseline_trajectories_wildtype_all.pickle', 'wb'))
-pickle.dump(mut_trajectories_np[:n_steps[best_idx]], open(f'{mut_outdir}/baseline_trajectories_mutant_all.pickle', 'wb'))
+pickle.dump(wt_trajectories_np[:n_steps[best_idx]], open(f'{wt_outdir}/baseline_trajectories_wildtype.pickle', 'wb'))
+pickle.dump(mut_trajectories_np[:n_steps[best_idx]], open(f'{mut_outdir}/baseline_trajectories_mutant.pickle', 'wb'))
 # %%
