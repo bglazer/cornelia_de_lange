@@ -13,15 +13,15 @@ from sklearn.decomposition import PCA
 import json
 from tqdm import tqdm
 #%%
-genotype = 'mutant'
-tmstp = '20230608_093734'
+genotype = 'wildtype'
+tmstp = '20230607_165324'
 adata = sc.read_h5ad(f'../../data/{genotype}_net.h5ad')
 
 #%%
 losses = {}
 active_inputs = {}
 
-logfiles = glob.glob(f'../../output/{tmstp}/logs/*.log')
+logfiles = glob.glob(f'../../../output/{tmstp}/logs/*.log')
 for path in logfiles:
     filename = path.split('/')[-1]
     node = int(filename.split('_')[3])
