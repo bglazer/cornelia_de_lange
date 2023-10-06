@@ -137,12 +137,16 @@ z_pX = float(pX.sum())
 # Initialize the neural networks
 pxt = Pxt(20, 3, device)
 ux = Ux(20, 3, device)
+# Initialize the weights of pxt to be positive
+# with torch.no_grad():
+#     for param in pxt.parameters():
+#         param.copy_(torch.abs(param))
 # Initialize the optimizers
-pxt_optimizer = torch.optim.Adam(pxt.parameters(), lr=5e-4)
+pxt_optimizer = torch.optim.Adam(pxt.parameters(), lr=1e-3)
 ux_optimizer = torch.optim.Adam(ux.parameters(), lr=1e-3)
 #%%
 # # This is a pre-training step to get p(x, t=0) to match the initial condition
-pxt0_optimizer = torch.optim.Adam(pxt.parameters(), lr=1e-2)
+pxt0_optimizer = torch.optim.Adam(pxt.parameters(), lr=1e-3)
 zero = torch.zeros(1)
 for i in range(500):
     pxt0_optimizer.zero_grad()
@@ -155,9 +159,11 @@ for i in range(500):
 ts = torch.linspace(0, 1, 100, device=device, requires_grad=False)
 ht = ts[1] - ts[0]
 
-l_fps = np.zeros(epochs)
 l_Spxts = np.zeros(epochs)
 l_p0s = np.zeros(epochs)
+l_fps = np.zeros(epochs)
+l_us = np.zeros(epochs)
+l_pxt_dx = np.zeros(epochs)
 for epoch in range(epochs):
     # Sample from the data distribution
     x = pD.rvs(size=1000)
@@ -165,16 +171,39 @@ for epoch in range(epochs):
     x = torch.tensor(x, device=device, dtype=torch.float32, requires_grad=False)[:,None]
 
     pxt_optimizer.zero_grad()
-    ux_optimizer.zero_grad()
+
     # This is the initial condition p(x, t=0)=p_D0 
     l_p0 = ((pxt(x0, ts=zero) - pX_D0)**2).mean()
     l_p0.backward()
+
+    # Boundary conditions
+    # Ensure that p(x,t) is zero at the boundaries
+    xlt0 = torch.arange(-1,1,.01, device=device, requires_grad=False)[:,None]
+    l_pxt_bc = (pxt(xlt0, ts)**2).mean()
+    l_pxt_bc.backward()
 
     # This is the marginal p(x) = int p(x,t) dt
     Spxt = pxt(x, ts).sum(dim=0) * ht
     # Ensure that the marginal p(x) matches the data distribution
     l_Spxt = ((Spxt[:,0] - px)**2).mean()
     l_Spxt.backward()
+
+    # Smoothness regularization of the d/dx p(x,t) term
+    # l_pxt_dt = ((pxt.dt(x, ts+ht) - pxt.dt(x, ts-ht)/(2*ht))**2).mean()*.00
+    # l_pxt_dt.backward()
+
+    # Record the losses
+    l_Spxts[epoch] = float(l_Spxt.mean())
+    l_p0s[epoch] = float(l_p0.mean())   
+
+    low = float(X1.min())
+    high = float(X1.max())
+    l = low-.25*(high-low) 
+    h = high+.25*(high-low)
+    x = torch.arange(l, h, .01, device=device)[:,None]
+
+    # for epoch in range(epochs):
+    ux_optimizer.zero_grad()
 
     # This is the calculation of the term that ensures the
     # derivatives match the Fokker-Planck equation
@@ -185,13 +214,61 @@ for epoch in range(epochs):
 
     l_fp.backward()
 
+    # Penalize the magnitude of u(x)
+    # l_u = (ux(x)**2).mean()*0
+    # l_u.backward()
+
+    # Take a gradient step
     pxt_optimizer.step()
     ux_optimizer.step()
-
-    print(f'{epoch} l_fp={float(l_fp.mean()):.5f}, l_px={float(l_Spxt.mean()):.5f}, l_p0={float(l_p0.mean()):.5f}')
     l_fps[epoch] = float(l_fp.mean())
-    l_Spxts[epoch] = float(l_Spxt.mean())
-    l_p0s[epoch] = float(l_p0.mean())   
+    # l_us[epoch] = float(l_u)
+    print(f'{epoch} l_px={float(l_Spxt.mean()):.5f}, l_p0={float(l_p0.mean()):.5f}, '
+          f'{epoch} l_fp={float(l_fp.mean()):.5f}')
+#%%
+for epoch in range(epochs):
+    ux_optimizer.zero_grad()
+    x = torch.linspace(X1.min(), X1.max()+span, 1000, device=device, requires_grad=False)[:,None]
+    # This is the calculation of the term that ensures the
+    # derivatives match the Fokker-Planck equation
+    # d/dx p(x,t) = -d/dt (u(x) p(x,t))
+    up_dx = (ux(x+hx) * pxt(x+hx, ts) - ux(x-hx) * pxt(x-hx, ts))/(2*hx)
+    pxt_dts = pxt.dt(x, ts)
+    l_fp = ((pxt_dts + up_dx)**2).mean()
+
+    l_fp.backward()
+
+    # Penalize the magnitude of u(x)
+    # l_u = (ux(x)**2).mean()*0
+    # l_u.backward()
+
+    # Take a gradient step
+    ux_optimizer.step()
+    l_fps[epoch] = float(l_fp.mean())
+    # l_us[epoch] = float(l_u)
+    print(f'{epoch} l_px={float(l_Spxt.mean()):.5f}, l_p0={float(l_p0.mean()):.5f}, '
+          f'{epoch} l_fp={float(l_fp.mean()):.5f}')
+
+#%%
+# # This is the calculation of the term that ensures the
+# # derivatives match the Fokker-Planck equation
+# # d/dx p(x,t) = -d/dt (u(x) p(x,t))
+# # Reinitialize the optimizer and the u(x) neural network
+# ux = Ux(20, 3, device)
+# ux_optimizer = torch.optim.Adam(ux.parameters(), lr=1e-3)
+# #%%
+# for i in range(1000):
+#     ux_optimizer.zero_grad()
+#     x = pD.rvs(size=1000)
+#     x = torch.tensor(x, device=device, dtype=torch.float32, requires_grad=False)[:,None]
+#     up_dx = (ux(x+hx) * pxt(x+hx, ts) - ux(x-hx) * pxt(x-hx, ts))/(2*hx)
+#     pxt_dts = pxt.dt(x, ts)
+#     l_fp = ((pxt_dts + up_dx)**2).mean()
+
+#     l_fp.backward()
+#     print(f'{i} l_fp={float(l_fp):.5f}')
+
+#     ux_optimizer.step()
 #%%
 plt.title('Loss curves')
 plt.plot(l_fps[10:], label='l_fp')
@@ -252,13 +329,111 @@ plt.colorbar()
 # Plot the u(x) term for all x
 fig, ax1 = plt.subplots(1,1, figsize=(10,5))
 plt.title('u(x) vs p(x)')
-ax1.plot(xs, -uxs, label='u(x)')
+ax1.plot(xs, uxs, label='u(x)')
 # Add vertical and horizontal grid lines
 ax1.grid()
+ax1.axhline(0, c='r', alpha=1)
 ax1.set_ylabel('u(x)')
 ax1.set_xlabel('x')
 ax2 = ax1.twinx()
 ax2.plot(xs, pD.pdf(xs), c='k', alpha=1, label='p(x)')
 ax2.set_ylabel('p(x)')
 fig.legend()
+# %%
+# Euler-Maruyama method for solving stochastic differential equations
+# This is a simple test to see if the Euler-Maruyama method can reproduce the
+# Fokker-Planck equation solution
+# dX = u(X)dt + sigma(X)dW
+# Sample from the initial distribution
+x = pD0.rvs(size=1000)
+x = torch.tensor(x, device=device, dtype=torch.float32, requires_grad=False)[:,None]
+xts = []
+ts = torch.linspace(0, 1, 500, device=device, requires_grad=False)
+ht = ts[1] - ts[0]
+for t in ts:
+    # Compute the drift term
+    u = ux(x)
+    # Compute the diffusion term
+    # Generate a set of random numbers
+    dW = torch.randn_like(x) * torch.sqrt(ht)
+    sigma = torch.ones_like(x)
+    # Compute the change in x
+    dx = u * ht + sigma * dW
+    # Update x
+    x = x + dx
+    # Boundary Condition for gene expression data: Ensure that x is non-negative
+    x[x<0] = 0
+    xts.append(x.cpu().detach().numpy())
+xts = np.concatenate(xts, axis=1)
+#%%
+# Plot the resulting probability densities at each timestep
+low = float(xs.min())
+high = float(xs.max())
+bins = np.linspace(low, high, 30)
+w = bins[1] - bins[0]
+for i in range(0, ts.shape[0], ts.shape[0]//10):
+    t = ts[i]
+    heights,bins = np.histogram(xts[:,i], 
+                                bins=bins,
+                                density=True)
+    z = heights.sum()
+    plt.bar(bins[:-1], heights/z, width=w, color=colors(float(t)), alpha=.2)
+# Accumulate pxts into buckets of the same shape as the histogram
+pxt_bins = np.zeros((bins.shape[0]-1, ts.shape[0]))
+ranges = np.linspace(0, pxts.shape[0]-1, len(bins), dtype=int) 
+pxt_bins = np.add.reduceat(pxts, ranges, axis=0) 
+pxt_bins = pxt_bins / pxt_bins.sum(axis=0)
+
+for i in range(0, pxts.shape[1], pxts.shape[1]//10):
+    t = ts[i]
+    plt.plot(bins, pxt_bins[:,i], color='blue', alpha=.2)
+labels = ['Simulation', 'Fokker-Planck theoretical']
+artists = [plt.Line2D([0], [0], color=c, alpha=.2) for c in ['red', 'blue']]
+plt.legend(artists, labels)
+plt.title('p(x,t)')
+
+#%%
+# Plot the cumulative distribution of the simulated data at each timestep
+sim_pxts = np.zeros((bins.shape[0]-1, ts.shape[0]))
+for i in range(0, ts.shape[0]):
+    heights,bins = np.histogram(xts[:,i], 
+                                bins=bins,
+                                density=True)
+    sim_pxts[:,i] = heights
+
+sim_cum_pxt = sim_pxts.cumsum(axis=1) / np.arange(1, sim_pxts.shape[1]+1)[None,:]
+
+# This plots the cumulative mean of p(x,t) at each timestep t, going from t=0 (left) to t=1 (right)
+# Higher probability is shown in yellow, lower probability is shown in blue
+plt.title('Cumulative mean of p(x,t)')
+plt.imshow(sim_cum_pxt, aspect='auto', interpolation='none', cmap='viridis')
+plt.ylabel('x')
+plt.xlabel('timestep (t)')
+plt.colorbar() 
+
+#%%
+# Plot the final cumulative distribution of simulations versus the data distribution
+plt.title('Final cumulative distribution of simulations vs data distribution')
+z = sim_cum_pxt[:,-1].sum()
+plt.plot(bins[:-1], sim_cum_pxt[:,-1]/z, label='Simulation')
+z = pD.pdf(bins[:-1]).sum()
+plt.plot(bins[:-1], pD.pdf(bins[:-1])/z, label='Data')
+plt.legend()
+plt.ylabel('Cumulative distribution')
+plt.xlabel('x')
+
+
+# %%
+# This plots the cumulative mean of p(x,t) at each timestep t, going from t=0 (left) to t=1 (right)
+# Higher probability is shown in yellow, lower probability is shown in blue
+pX = pD.pdf(bins[:-1])
+sim_cum_pxt_err = (pX[:,None] - sim_cum_pxt)**2
+
+plt.title('Error of Cumulative mean of p(x,t)\n'
+          f'Error ∫pxt(x,t)dt = {l_Spxt:.5f}\n'
+          f'Error Simulation = {sim_cum_pxt_err[:,-1].mean():.5f}')
+plt.imshow(sim_cum_pxt_err, aspect='auto', interpolation='none', cmap='viridis')
+plt.ylabel('x')
+plt.xlabel('timestep (t)')
+plt.colorbar() 
 # %%
