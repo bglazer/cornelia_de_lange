@@ -76,7 +76,7 @@ mut_trajectories_np = util.tonp(mut_trajectories)
 mut_idxs_np = util.tonp(mut_nearest_idxs)
 Xnp = util.tonp(X)
 #%%
-plotting.distribution(mut_trajectories_np, pca, 'Mutant')
+plotting.time_distribution(mut_trajectories_np, pca, 'Mutant')
 #%%
 plotting.arrow_grid(data, pca, model, 'Mutant', perturbation=None, device=device)
 # %%

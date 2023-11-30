@@ -18,6 +18,7 @@ import plotting
 from textwrap import fill
 from joblib import Parallel, delayed
 import os
+import matplotlib
 
 #%%
 os.environ['LD_LIBRARY_PATH'] = '/home/bglaze/miniconda3/envs/cornelia_de_lange/lib/'
@@ -29,10 +30,10 @@ torch.manual_seed(0)
 
 # %%
 # Load the models
-# tmstp = '20230607_165324'  
-# genotype = 'wildtype'
-genotype = 'mutant'
-tmstp = '20230608_093734'
+tmstp = '20230607_165324'  
+genotype = 'wildtype'
+# genotype = 'mutant'
+# tmstp = '20230608_093734'
 data = sc.read_h5ad(f'../../data/{genotype}_net.h5ad')
 
 outdir = f'../../output/{tmstp}'
@@ -53,7 +54,6 @@ state_dict = torch.load(f'{outdir}/models/optimal_{genotype}.torch')
 # %%
 X = torch.tensor(data.X.toarray()).float()
 Xnp = util.tonp(X)
-cell_types = {c:i for i,c in enumerate(sorted(set(data.obs['cell_type'])))}
 proj = np.array(data.obsm['X_pca'])
 pca = PCA()
 # Set the PC mean and components
@@ -64,7 +64,6 @@ T = data.obsm['transition_matrix']
 
 V = util.velocity_vectors(T, X)
 V_emb = util.embed_velocity(X, V, lambda x: np.array(pca.transform(x)[:,0:2]))
-
 # %%
 torch.set_num_threads(24)
 start_idxs = data.uns['initial_points_via']
@@ -73,7 +72,8 @@ num_nodes = X.shape[1]
 hidden_dim = 64
 num_layers = 3
 
-
+#%%
+cell_types = {c:i for i,c in enumerate(sorted(set(data.obs['cell_type'])))}
 
 #%%
 simulators = []
@@ -87,7 +87,7 @@ for i in range(4):
     device=f'cuda:{i}'
     model = model.to(device)
     Xs.append(X.to(device))
-    simulators.append(Simulator(model, Xs[i], device=device))
+    simulators.append(Simulator(model, Xs[i], device=device, boundary=False, show_progress=False))
 
 #%%
 # Convert from ids to gene names
@@ -110,6 +110,33 @@ baseline_trajectories_np = baseline_trajectories
 baseline_idxs = pickle.load(open(f'{outdir}/baseline_nearest_cell_idxs_{genotype}.pickle', 'rb'))
 baseline_velo,_ = plotting.compute_velo(model=simulators[0].model, X=Xs[0], numpy=True)
 #%%
+plotting.time_distribution(baseline_trajectories_np[:,:], pca,
+                        label=f'Baseline {genotype} - no knockout',
+                        baseline=Xnp)
+# plt.show()
+plt.savefig(f'{pltdir}/baseline_{genotype}_time_distribution.png', bbox_inches='tight')
+plt.close()
+#%%
+plotting.cell_type_distribution(baseline_trajectories_np[:,:], 
+                                baseline_idxs[:,:],
+                                data,
+                                cell_types,
+                                pca,
+                                label=f'Baseline {genotype} - no knockout',
+                                baseline=Xnp)
+# plt.show()
+plt.savefig(f'{pltdir}/baseline_{genotype}_cell_type_distribution.png', bbox_inches='tight')
+plt.close()
+#%%
+plotting.cell_type_distribution(np.expand_dims(Xnp, axis=1), 
+                                np.expand_dims(np.arange(Xnp.shape[0]), axis=1),
+                                data,
+                                cell_types,
+                                pca,
+                                label=f'Cell Type Distribution - Data',
+                                baseline=None,
+                                s=20)
+#%%
 node_to_idx = pickle.load(open(f'../../data/protein_id_to_idx.pickle', 'rb'))
 all_genes = set(node_to_idx.keys())
 
@@ -130,8 +157,7 @@ def simulate_knockout(ko_gene, i, repeats):
     simulator = simulators[gpu]
     perturb_trajectories, perturb_nearest_idxs = simulator.simulate(repeats, t_span, 
                                                                     node_perturbation=perturbation, 
-                                                                    boundary=False,
-                                                                    show_progress=False)
+                                                                    )
     ko_gene_name = protein_id_name[ko_gene]
     perturb_trajectories_np = util.tonp(perturb_trajectories)
     perturb_idxs_np = util.tonp(perturb_nearest_idxs)
@@ -150,10 +176,21 @@ def simulate_knockout(ko_gene, i, repeats):
     with open(f'{datadir}/{ko_gene_name}_{genotype}_knockout_mean_trajectories.pickle', 'wb') as f:
         pickle.dump(mean_trajectories, f)
 
-    plotting.distribution(perturb_trajectories_np[:,::10], pca,
-                          label=f'{ko_gene_name} Knockout',
-                          baseline=Xnp)
-    plt.savefig(f'{pltdir}/{ko_gene_name}_{genotype}_knockout_distribution.png')
+    plotting.time_distribution(perturb_trajectories_np[:,:], pca,
+                               label=f'{ko_gene_name} Knockout',
+                               baseline=Xnp)
+    plt.savefig(f'{pltdir}/{ko_gene_name}_{genotype}_knockout_time_distribution.png',
+                bbox_inches='tight')
+    plt.close()
+    plotting.cell_type_distribution(perturb_trajectories_np[:,:], 
+                                    perturb_idxs_np[:,:],
+                                    data,
+                                    cell_types,
+                                    pca,
+                                    label=f'{ko_gene_name} Knockout',
+                                    baseline=Xnp)
+    plt.savefig(f'{pltdir}/{ko_gene_name}_{genotype}_knockout_cell_type_distribution.png',
+                bbox_inches='tight')
     plt.close()
     velo,_ = plotting.compute_velo(model=simulator.model, X=Xs[gpu], perturbation=perturbation, numpy=True)
     plotting.arrow_grid(velos=[velo, baseline_velo], 
@@ -169,26 +206,20 @@ def simulate_knockout(ko_gene, i, repeats):
                                                            [data, data], 
                                                            cell_types,
                                                            [ko_gene_name, 'baseline'])
-    mut_cell_type_traj, perturb_cell_type_traj = trajectories
     # Save the trajectories
     with open(f'{datadir}/{ko_gene_name}_{genotype}_knockout_cell_type_trajectories.pickle', 'wb') as f:
         pickle.dump(trajectories, f)
     plt.savefig(f'{pltdir}/{ko_gene_name}_{genotype}_knockout_cell_type_trajectories.png')
     plt.close()
-    mut_ct = data.obs['cell_type'].value_counts()/data.shape[0]
-    mut_ct = mut_ct[sorted(cell_types)]
-    mut_total_cell_types = mut_cell_type_traj.sum(axis=1)/mut_cell_type_traj.sum()
-    perturb_total_cell_types = perturb_cell_type_traj.sum(axis=1)/perturb_cell_type_traj.sum()
     # Plot side by side bar charts of the cell type proportions
-    n_cells = (len(start_idxs) * n_repeats * n_steps)
-    perturb_cell_type_traj = trajectories[0]
-    baseline_cell_type_traj = trajectories[1]
-    perturb_cell_proportions = perturb_cell_type_traj.sum(axis=1) / n_cells
-    baseline_cell_proportions = baseline_cell_type_traj.sum(axis=1) / n_cells
+    perturb_cell_proportions, perturb_cell_errors = plotting.calculate_cell_type_proportion(perturb_idxs_np, data, cell_types, n_repeats, error=True)
+    baseline_cell_proportions, baseline_cell_errors = plotting.calculate_cell_type_proportion(baseline_idxs, data, cell_types, n_repeats, error=True)
     # Save the cell type proportions
     plotting.cell_type_proportions(proportions=(perturb_cell_proportions, 
                                                 baseline_cell_proportions), 
-                                   cell_types=cell_types, 
+                                   proportion_errors=(perturb_cell_errors,
+                                           baseline_cell_errors),
+                                   cell_types=list(cell_types), 
                                    labels=[f'{ko_gene_name} Knockout', f'{genotype.capitalize()} baseline'])
     plt.savefig(f'{pltdir}/{ko_gene_name}_{genotype}_knockout_cell_type_proportions.png',
                 bbox_inches='tight');

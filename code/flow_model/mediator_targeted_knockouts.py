@@ -1,13 +1,11 @@
 #%%
-# %load_ext autoreload
-# %autoreload 2
+%load_ext autoreload
+%autoreload 2
 #%%
 import pickle
 import scanpy as sc
 import numpy as np
-from scipy.stats import hypergeom
 import scanpy as sc
-# import numpy as np
 import pickle
 from flow_model import GroupL1FlowModel
 import torch
@@ -20,7 +18,7 @@ from simulator import Simulator
 from matplotlib import pyplot as plt
 import plotting
 from tabulate import tabulate
-from collections import Counter
+from mediators import find_mediators, find_bridges
 
 #%%
 # Set the random seed
@@ -29,14 +27,14 @@ torch.manual_seed(0)
 #%%
 os.environ['LD_LIBRARY_PATH'] = '/home/bglaze/miniconda3/envs/cornelia_de_lange/lib/'
 # %%
-# genotype = 'wildtype'
-# tmstp = '20230607_165324'
-genotype = 'mutant'
-tmstp = '20230608_093734'
+genotype = 'wildtype'
+tmstp = '20230607_165324'
+# genotype = 'mutant'
+# tmstp = '20230608_093734'
 data = sc.read_h5ad(f'../../data/{genotype}_net.h5ad')
-cell_types = {c:i for i,c in enumerate(set(data.obs['cell_type']))}
 outdir = f'../../output/{tmstp}'
 ko_dir = f'{outdir}/knockout_simulations'
+datadir = f'{outdir}/knockout_simulations/data'
 pltdir = f'{outdir}/knockout_simulations/figures'
 #%%
 node_to_idx = pickle.load(open(f'../../data/protein_id_to_idx.pickle', 'rb'))
@@ -46,167 +44,21 @@ all_genes = set(node_to_idx.keys())
 protein_id_name = pickle.load(open(f'../../data/protein_id_to_name.pickle','rb'))
 protein_id_name = {id: '/'.join(name) for id, name in protein_id_name.items()}
 name_protein_id = {name: id for id, name in protein_id_name.items()}
-
-# %%
-# Load the shortest paths
-optimal_model_shortest_paths_graph = pickle.load(open(f'../../output/{tmstp}/optimal_{genotype}_shortest_paths_graph.pickle', 'rb'))
-shortest_paths_to_target = pickle.load(open(f'../../output/{tmstp}/optimal_{genotype}_shortest_paths.pickle', 'rb'))
-#%%
-shortest_paths_from_source = {}
-for target, paths in shortest_paths_to_target.items():
-    for path in paths:
-        source = path[0]
-        if source not in shortest_paths_from_source:
-            shortest_paths_from_source[source] = []
-        shortest_paths_from_source[source].append(path)
-
-# Reverse the order of the shortest paths to target
-shortest_paths_to_target_ = {}
-for target, paths in shortest_paths_to_target.items():
-    for path in paths:
-        source = path[0]
-        if target not in shortest_paths_to_target_:
-            shortest_paths_to_target_[target] = []
-        shortest_paths_to_target_[target].append(path[::-1])
-
-shortest_paths_to_target = shortest_paths_to_target_
-
+graph = pickle.load(open(f'../../data/filtered_graph.pickle', 'rb'))
 
 #%%
-all_shortest_paths = pickle.load(open(f'../../output/{tmstp}/all_shortest_paths.pickle', 'rb'))
-
-all_shortest_paths_from_source = {}
-for target, paths in all_shortest_paths.items():
-    for path in paths:
-        source = path[0]
-        if source not in all_shortest_paths_from_source:
-            all_shortest_paths_from_source[source] = []
-        all_shortest_paths_from_source[source].append(path)
-
-all_shortest_paths_to_target = {}
-for source, paths in all_shortest_paths.items():
-    for path in paths:
-        target = path[-1]
-        if target not in all_shortest_paths_to_target:
-            all_shortest_paths_to_target[target] = []
-        all_shortest_paths_to_target[target].append(path[::-1])
-        
+# Load the target input list
+with open(f'{outdir}/optimal_{genotype}_active_inputs.pickle', 'rb') as f:
+    target_active_genes = pickle.load(f)
 #%%
-# Calculate the percentage of shortest paths that a mediator appears in for each knockout gene
-def count_mediators(all_paths):
-    mediators = {}
-    target_counts = {}
-    for source, paths in all_paths.items():
-        for path in paths:
-            if len(path) > 2:
-                if source not in mediators:
-                    mediators[source] = {}
-                target = path[-1]
-                if target not in mediators[source]:
-                    mediators[source][target] = set()
-                for mediator in path[1:-1]:
-                    mediators[source][target].add(mediator)
-        if source in mediators:
-            target_counts[source] = len(mediators[source])
-
-    mediator_counts = {}
-    for source, target_mediators in mediators.items():
-        mediator_counts[source] = {}
-        for target, _mediators in target_mediators.items():
-            for mediator in _mediators:
-                if mediator not in mediator_counts[source]:
-                    mediator_counts[source][mediator] = 0
-                mediator_counts[source][mediator] += 1
-
-    return mediator_counts, target_counts
-
-#%%
-def mediator_probability(shortest_path_set, all_shortest_paths):
-    # k - number of matches in chosen set, i.e. number of shortest paths that a mediator appears in
-    # M - total number of items, 
-    # n - number of matches in population
-    # N - size of set chosen at random
-    mediator_counts, target_counts = count_mediators(shortest_path_set)
-    total_mediator_counts, _ = count_mediators(all_shortest_paths)
-    mediator_probs = {}
-    for source, mediators in mediator_counts.items():
-        for mediator, count in mediators.items():
-            # number of times we see this mediator in any shortest path from this source to the chosen targets
-            k = mediator_counts[source][mediator]
-            # Total possible number of shortest paths
-            M = len(node_to_idx)
-            # Number of times we see this mediator in any shortest path from the source to any target
-            n = total_mediator_counts[source][mediator]
-            # Number of targets of this source
-            N = target_counts[source]
-            # Probability of observing k or more matches 
-            p = 1-hypergeom.cdf(k-1, M, n, N)
-            mediator_probs[(source, mediator)] = p
-            print(protein_id_name[source], protein_id_name[mediator], p)
-            print('k=',k)
-            print('M=',M)
-            print('n=',n)
-            print('N=',N)
-    mediator_probs = {k: v for k, v in sorted(mediator_probs.items(), key=lambda item: item[1])}
-    return mediator_probs
-
-mediator_probs_source = mediator_probability(shortest_paths_from_source, all_shortest_paths_from_source)
-mediator_probs_target = mediator_probability(shortest_paths_to_target, all_shortest_paths_to_target)
-
-#%%
-print("Significant mediators from source:")
-mediated_sources = {}
-num_significant = 0
-for source_mediator, prob in mediator_probs_source.items():
-    source, mediator = source_mediator
-    if prob < 0.01:
-        if mediator not in mediated_sources:
-            mediated_sources[mediator] = []
-        mediated_sources[mediator].append(source)
-        num_significant += 1
-        print(protein_id_name[source], protein_id_name[mediator], f'p={prob:.2e}')
-print("Significant mediators to targets:")
-mediated_targets = {}
-for target_mediator, prob in mediator_probs_target.items():
-    target, mediator = target_mediator
-    if prob < 0.01:
-        if mediator not in mediated_targets:
-            mediated_targets[mediator] = []
-        mediated_targets[mediator].append(target)
-        num_significant += 1
-        print(protein_id_name[target], protein_id_name[mediator], f'p={prob:.2e}')
-#%%
-print(f'Number of significant mediators: {num_significant} out of {len(mediator_probs_source)+len(mediator_probs_target)}')
+results  = find_bridges(target_active_genes,
+                        knowledge_graph=graph,
+                        #all_shortest_paths=None,
+                        verbose=False,
+                        threshold=0.01)
+mediator_probs, mediated_interactions = results #, all_shortest_paths = results
 
 
-#%%
-mediated_interactions = {}
-for mediator, sources in mediated_sources.items():
-    for source in sources:
-        # print(protein_id_name[mediator], protein_id_name[source])
-        for path in shortest_paths_from_source[source]:
-            if mediator in path:
-                target = path[-1]
-                if mediator not in mediated_interactions:
-                    mediated_interactions[mediator] = set()
-                mediated_interactions[mediator].add((source, target))
-for mediator, targets in mediated_targets.items():
-    for target in targets:
-        # print(protein_id_name[mediator], protein_id_name[target])
-        for path in shortest_paths_to_target[target]:
-            # This is reversed from the normal direction because we inverted the 
-            # paths above to make the mediator_count code work for both sources and targets
-            source = path[-1]
-            target = path[0]
-            if mediator in path:
-                if mediator not in mediated_interactions:
-                    mediated_interactions[mediator] = set()
-                mediated_interactions[mediator].add((source, target))
-for mediator, interactions in mediated_interactions.items():
-    print(protein_id_name[mediator])
-    for interaction in sorted(interactions):
-        source, target = interaction
-        print(f'    {protein_id_name[source]} -> {protein_id_name[target]}')
 #%%
 regulatory_graph = pickle.load(open('../../data/filtered_graph.pickle','rb'))
 degree_rank = {x[1][0]: x[0] 
@@ -216,6 +68,7 @@ mediated_counts = []
 
 for mediator in mediated_interactions:
     mediated_counts.append((len(mediated_interactions[mediator]), mediator))
+
 headers = ['Mediator',
            'Number of Mediated Interactions',
            'In Degree',
@@ -229,7 +82,6 @@ for count,mediator in sorted(mediated_counts, reverse=True):
                  regulatory_graph.out_degree(mediator),
                  degree_rank[mediator]))
 print(tabulate(rows, headers=headers))
-
 
 #%%
 # Check if ko_dir exists. This is where we will save the knockout simulations and figures
@@ -256,7 +108,6 @@ V_emb = util.embed_velocity(X, V, lambda x: np.array(pca.transform(x)[:,0:2]))
 
 # %%
 torch.set_num_threads(24)
-start_idxs = data.uns['initial_points_via']
 num_nodes = X.shape[1]
 hidden_dim = 64
 num_layers = 3
@@ -264,8 +115,6 @@ num_layers = 3
 #%%
 device='cuda:0'
 n_repeats = 10
-start_idxs = data.uns['initial_points_via']
-repeats = torch.tensor(start_idxs.repeat(n_repeats)).to(device)
 len_trajectory = 98
 n_steps = len_trajectory*4
 t_span = torch.linspace(0, len_trajectory, n_steps)
@@ -278,7 +127,7 @@ baseline_idxs = pickle.load(open(f'{outdir}/baseline_nearest_cell_idxs_{genotype
 # baseline_velo, _ = plotting.compute_velo(model=model, X=X, numpy=True)
 
 #%%
-def knockout(mediator, X, repeats, i):
+def knockout(mediator, X, i):
     device = f'cuda:{i%4}'
     model = GroupL1FlowModel(input_dim=num_nodes, 
                              hidden_dim=hidden_dim, 
@@ -298,14 +147,18 @@ def knockout(mediator, X, repeats, i):
             group_l1[source_idx] = -1
     
     X = X.to(device)
+    # Choose a random sample of NMP cells as initial points for the simulation
+    nmp_cells = np.where(data.obs['cell_type'] == 'NMP')[0]
+    pct_initial_cells = .20
+    n_initial_cells = int(pct_initial_cells * len(nmp_cells))
+    start_idxs = np.random.choice(nmp_cells, size=n_initial_cells, replace=False)
+    repeats = torch.tensor(start_idxs.repeat(n_repeats)).to(device)
     repeats = repeats.to(device)
     Xnp = util.tonp(X)
-    simulator = Simulator(model, X, device=device)
+    simulator = Simulator(model, X, boundary=False, show_progress=False, device=device)
     print(f'Knockout Mediator {protein_id_name[mediator]:10s}: ({i+1}/{len(mediated_interactions)})', flush=True)
     
-    perturb_trajectories, perturb_nearest_idxs = simulator.simulate(repeats, t_span, 
-                                                                    boundary=False,
-                                                                    show_progress=False)
+    perturb_trajectories, perturb_nearest_idxs = simulator.simulate(repeats, t_span)
     
     mediator_gene_name = protein_id_name[mediator]
     perturb_trajectories_np = util.tonp(perturb_trajectories)
@@ -314,13 +167,19 @@ def knockout(mediator, X, repeats, i):
     # Aggregate the individual cell trajectories by mean
     mean_trajectories = perturb_trajectories.mean(dim=1)
     # Save the mean trajectories
-    with open(f'{ko_dir}/{mediator_gene_name}_mediator_knockout_mean_trajectories_{genotype}.pickle', 'wb') as f:
+    with open(f'{datadir}/{mediator_gene_name}_{genotype}_mediator_knockout_mean_trajectories.pickle', 'wb') as f:
         pickle.dump(mean_trajectories, f)
 
-    plotting.distribution(perturb_trajectories_np[:,::10], pca,
+    plotting.time_distribution(perturb_trajectories_np[:,:], pca,
                           label=f'{mediator_gene_name} Mediator Knockout',
                           baseline=Xnp)
-    plt.savefig(f'{pltdir}/{mediator_gene_name}_mediator_knockout_distribution.png')
+    plt.savefig(f'{pltdir}/{mediator_gene_name}_mediator_knockout_time_distribution.png')
+    plt.close()
+
+    plotting.cell_type_distribution(perturb_trajectories_np[:,:], perturb_idxs_np[:,:], data,
+                                    cell_types, pca, f'{mediator_gene_name} Mediator Knockout', 
+                                    baseline_trajectories_np.reshape(-1, baseline_trajectories_np.shape[-1]))
+    plt.savefig(f'{pltdir}/{mediator_gene_name}_mediator_knockout_cell_type_distribution.png')
     plt.close()
 
     plotting.sample_trajectories(perturb_trajectories_np, Xnp, pca, f'{mediator_gene_name} Mediator Knockout')
@@ -330,36 +189,34 @@ def knockout(mediator, X, repeats, i):
                                                            [data, data], 
                                                            cell_types,
                                                            [mediator_gene_name, 'baseline'])
-    mut_cell_type_traj, perturb_cell_type_traj = trajectories
     # Save the trajectories
-    with open(f'{ko_dir}/{mediator_gene_name}_mediator_knockout_cell_type_trajectories_{genotype}.pickle', 'wb') as f:
+    with open(f'{datadir}/{mediator_gene_name}_{genotype}_mediator_knockout_cell_type_trajectories.pickle', 'wb') as f:
         pickle.dump(trajectories, f)
     plt.savefig(f'{pltdir}/{mediator_gene_name}_mediator_knockout_cell_type_trajectories.png')
     plt.close()
-    mut_ct = data.obs['cell_type'].value_counts()/data.shape[0]
-    mut_ct = mut_ct[sorted(cell_types)]
-    mut_total_cell_types = mut_cell_type_traj.sum(axis=1)/mut_cell_type_traj.sum()
-    perturb_total_cell_types = perturb_cell_type_traj.sum(axis=1)/perturb_cell_type_traj.sum()
     # Plot side by side bar charts of the cell type proportions
-    n_cells = (len(start_idxs) * n_repeats * n_steps)
-    perturb_cell_type_traj = trajectories[0]
-    baseline_cell_type_traj = trajectories[1]
-    perturb_cell_proportions = perturb_cell_type_traj.sum(axis=1) / n_cells
-    baseline_cell_proportions = baseline_cell_type_traj.sum(axis=1) / n_cells
+    perturb_cell_proportions, perturb_cell_proportion_errors = plotting.calculate_cell_type_proportion(perturb_idxs_np, data, cell_types, n_repeats=n_repeats, error=True)
+    # TODO manually entering the n_repeats for baseline as 10, need to figure this out dynamically
+    baseline_cell_proportions, baseline_cell_proportion_errors = plotting.calculate_cell_type_proportion(baseline_idxs, data, cell_types, n_repeats=10, error=True)
+    
     # Save the cell type proportions
     plotting.cell_type_proportions(proportions=(perturb_cell_proportions, 
                                                 baseline_cell_proportions), 
+                                   proportion_errors=(perturb_cell_proportion_errors,
+                                                      baseline_cell_proportion_errors),
                                    cell_types=cell_types, 
-                                   labels=[f'{mediator_gene_name} Mediator Knockout', 'Mutant baseline'])
+                                   labels=[f'{mediator_gene_name} Mediator Knockout', f'{genotype.capitalize()} baseline'])
     plt.savefig(f'{pltdir}/{mediator_gene_name}_mediator_knockout_cell_type_proportions.png',
                 bbox_inches='tight');
     plt.close();
-    with open(f'{ko_dir}/{mediator_gene_name}_mediator_knockout_cell_type_proportions_{genotype}.pickle', 'wb') as f:
+    with open(f'{datadir}/{mediator_gene_name}_{genotype}_mediator_knockout_cell_type_proportions.pickle', 'wb') as f:
         pickle.dump((perturb_cell_proportions, baseline_cell_proportions), f)
-
+#%%
+# mediator = 'ENSMUSP00000031650'
+# knockout(mediator, X, 0)
 #%%
 from joblib import Parallel, delayed
-_=Parallel(n_jobs=8)(delayed(knockout)(mediator, X, repeats, i) for i,mediator in enumerate(mediated_interactions))
+_=Parallel(n_jobs=8)(delayed(knockout)(mediator, X, i) for i,mediator in enumerate(mediated_interactions))
 
 # %%
 # Save the mediated interactions
@@ -371,11 +228,11 @@ cell_type_ko_proportions = {}
 for i, mediator in enumerate(mediated_interactions):
     mediator_gene_name = protein_id_name[mediator]
     # Load the knockout results
-    with open(f'{ko_dir}/{mediator_gene_name}_mediator_knockout_cell_type_proportions_{genotype}.pickle', 'rb') as f:
+    with open(f'{datadir}/{mediator_gene_name}_{genotype}_mediator_knockout_cell_type_proportions.pickle', 'rb') as f:
         ko_cell_type_proportions = pickle.load(f)
     perturb_cell_proportions, baseline_cell_proportions = ko_cell_type_proportions
 
-    with open(f'{ko_dir}/{mediator_gene_name}_mediator_knockout_cell_type_proportions_{genotype}.pickle', 'rb') as f:
+    with open(f'{datadir}/{mediator_gene_name}_{genotype}_mediator_knockout_cell_type_proportions.pickle', 'rb') as f:
         cell_type_ko_proportions[mediator] = {}
         for i,cell_type in enumerate(cell_types):
             cell_type_ko_proportions[mediator][cell_type] = perturb_cell_proportions[i]

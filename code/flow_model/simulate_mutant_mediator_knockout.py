@@ -114,7 +114,7 @@ for mediator, targets in mediator_targets.items():
     mediator_name = protein_id_name[mediator]
     perturb_trajectories_np = util.tonp(perturb_trajectories)
     perturb_idxs_np = util.tonp(perturb_nearest_idxs)
-    plotting.distribution(perturb_trajectories_np[:,::10], pca,
+    plotting.time_distribution(perturb_trajectories_np[:,::10], pca,
                           label=f'{mediator_name} Targets Knockout',
                           baseline=Xnp)
     plt.savefig(f'{pltdir}/{mediator_name}_perturbed_distribution.png')

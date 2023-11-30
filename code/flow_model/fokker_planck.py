@@ -4,8 +4,9 @@ import torch
 import matplotlib
 import matplotlib.pyplot as plt
 import scanpy as sc
-from scipy.stats import rv_histogram
+from scipy.stats import rv_histogram, gamma
 from torch.nn import Linear, ReLU
+from flow_model import L1FlowModel
 
 # Generic Dense Multi-Layer Perceptron (MLP), which is just a stack of linear layers with ReLU activations
 # input_dim: dimension of input
@@ -39,13 +40,40 @@ def gen_p(x, bins=100):
     phist = rv_histogram(hist, density=True)
     return phist
 
+#%%
+# Zero Inflated Gamma distribution
+class ZIG():
+    def __init__(self, x):
+        self.x = x
+        # Find probability of zero entries
+        self.p = (x==0).mean()
+        # Use scipy to fit a gamma distribution to the data
+        # Get the nonzero entries
+        xnz = x[x>0]
+        alpha, loc, beta = gamma.fit(xnz)
+        self.gamma = gamma(alpha, loc, beta)
+
+    def pdf(self, x):
+        p = np.zeros_like(x)
+        # Nonzero entries have a probability defined by the gamma distribution
+        # TODO this won't work on the GPU with torch tensors
+        # TODO this isn't actually a probability distribution?
+        p[x>0] = self.gamma.pdf(x[x>0])
+        p[x==0] = self.p
+
+        return p 
+
+
 # %%
 # The u(x) drift term of the Fokker-Planck equation, modeled by a neural network
 class Ux(torch.nn.Module):
-    def __init__(self, hidden_dim, n_layers, device):
+    def __init__(self, in_dim, hidden_dim, n_layers, device):
         super(Ux, self).__init__()
         # The drift term of the Fokker-Planck equation, modeled by a neural network
-        self.model = MLP(1, 1, hidden_dim, n_layers).to(device)
+        self.model = MLP(input_dim=in_dim, 
+                         output_dim=1, 
+                         hidden_dim=hidden_dim, 
+                         num_layers=n_layers).to(device)
 
     def forward(self, x):
         return self.model(x)
@@ -96,6 +124,7 @@ cell_types = adata.obs['cell_type']
 nmp_cells = cell_types[cell_types=='NMP']
 gene = 'POU5F1'
 geneX = adata[:,gene].X.toarray()
+X = adata.X.toarray()
 X0 = geneX[cell_types=='NMP']
 X1 = geneX.copy()
 
@@ -118,8 +147,6 @@ steps = 1
 hx = 1e-3
 ht = 1e-3
 #%%
-ts = torch.linspace(0, 1, 100, device=device, requires_grad=False)
-# ## %%
 # Generate a continuous distribution from the data
 pD = gen_p(X1.cpu().numpy(), bins=100)
 pD0 = gen_p(X0.cpu().numpy(), bins=100)
@@ -135,26 +162,23 @@ z_pX = float(pX.sum())
 # pX = pX / z_pX
 #%%
 # Initialize the neural networks
+n_genes = X.shape[1]
 pxt = Pxt(20, 3, device)
-ux = Ux(20, 3, device)
-# Initialize the weights of pxt to be positive
-# with torch.no_grad():
-#     for param in pxt.parameters():
-#         param.copy_(torch.abs(param))
+ux = Ux(1, 20, 3, device)
 # Initialize the optimizers
 pxt_optimizer = torch.optim.Adam(pxt.parameters(), lr=1e-3)
 ux_optimizer = torch.optim.Adam(ux.parameters(), lr=1e-3)
-#%%
+##%%
 # # This is a pre-training step to get p(x, t=0) to match the initial condition
-pxt0_optimizer = torch.optim.Adam(pxt.parameters(), lr=1e-3)
+# pxt0_optimizer = torch.optim.Adam(pxt.parameters(), lr=1e-3)
 zero = torch.zeros(1)
-for i in range(500):
-    pxt0_optimizer.zero_grad()
-    l_pD0 = ((pxt(x0, ts=zero) - pX_D0)**2).mean()
-    l_pD0.backward()
-    # torch.nn.utils.clip_grad_norm_(pxt.parameters(), .001)
-    pxt0_optimizer.step()
-    print(f'{i} l_pD0={float(l_pD0.mean()):.5f}')
+# for i in range(1000):
+#     pxt0_optimizer.zero_grad()
+#     l_pD0 = ((pxt(x0, ts=zero) - pX_D0)**2).mean()
+#     l_pD0.backward()
+#     # torch.nn.utils.clip_grad_norm_(pxt.parameters(), .001)
+#     pxt0_optimizer.step()
+#     print(f'{i} l_pD0={float(l_pD0.mean()):.5f}')
 #%%
 ts = torch.linspace(0, 1, 100, device=device, requires_grad=False)
 ht = ts[1] - ts[0]
@@ -178,12 +202,12 @@ for epoch in range(epochs):
 
     # Boundary conditions
     # Ensure that p(x,t) is zero at the boundaries
-    xlt0 = torch.arange(-1,1,.01, device=device, requires_grad=False)[:,None]
+    xlt0 = torch.arange(-1,-1e-5,.01, device=device, requires_grad=False)[:,None]
     l_pxt_bc = (pxt(xlt0, ts)**2).mean()
     l_pxt_bc.backward()
 
     # This is the marginal p(x) = int p(x,t) dt
-    Spxt = pxt(x, ts).sum(dim=0) * ht
+    Spxt = pxt(x, ts)[1:].sum(dim=0) * ht
     # Ensure that the marginal p(x) matches the data distribution
     l_Spxt = ((Spxt[:,0] - px)**2).mean()
     l_Spxt.backward()
@@ -198,7 +222,7 @@ for epoch in range(epochs):
 
     low = float(X1.min())
     high = float(X1.max())
-    l = low-.25*(high-low) 
+    l = low-.25*(high-low)
     h = high+.25*(high-low)
     x = torch.arange(l, h, .01, device=device)[:,None]
 
@@ -210,7 +234,12 @@ for epoch in range(epochs):
     # d/dx p(x,t) = -d/dt (u(x) p(x,t))
     up_dx = (ux(x+hx) * pxt(x+hx, ts) - ux(x-hx) * pxt(x-hx, ts))/(2*hx)
     pxt_dts = pxt.dt(x, ts)
+    pxt_dts[:,x<0] = 0
     l_fp = ((pxt_dts + up_dx)**2).mean()
+
+    # Set ux(x) to zero at the boundaries
+    # l_ux_bc = (ux(xlt0)**2).mean()
+    # l_fp += l_ux_bc
 
     l_fp.backward()
 
@@ -225,50 +254,7 @@ for epoch in range(epochs):
     # l_us[epoch] = float(l_u)
     print(f'{epoch} l_px={float(l_Spxt.mean()):.5f}, l_p0={float(l_p0.mean()):.5f}, '
           f'{epoch} l_fp={float(l_fp.mean()):.5f}')
-#%%
-for epoch in range(epochs):
-    ux_optimizer.zero_grad()
-    x = torch.linspace(X1.min(), X1.max()+span, 1000, device=device, requires_grad=False)[:,None]
-    # This is the calculation of the term that ensures the
-    # derivatives match the Fokker-Planck equation
-    # d/dx p(x,t) = -d/dt (u(x) p(x,t))
-    up_dx = (ux(x+hx) * pxt(x+hx, ts) - ux(x-hx) * pxt(x-hx, ts))/(2*hx)
-    pxt_dts = pxt.dt(x, ts)
-    l_fp = ((pxt_dts + up_dx)**2).mean()
 
-    l_fp.backward()
-
-    # Penalize the magnitude of u(x)
-    # l_u = (ux(x)**2).mean()*0
-    # l_u.backward()
-
-    # Take a gradient step
-    ux_optimizer.step()
-    l_fps[epoch] = float(l_fp.mean())
-    # l_us[epoch] = float(l_u)
-    print(f'{epoch} l_px={float(l_Spxt.mean()):.5f}, l_p0={float(l_p0.mean()):.5f}, '
-          f'{epoch} l_fp={float(l_fp.mean()):.5f}')
-
-#%%
-# # This is the calculation of the term that ensures the
-# # derivatives match the Fokker-Planck equation
-# # d/dx p(x,t) = -d/dt (u(x) p(x,t))
-# # Reinitialize the optimizer and the u(x) neural network
-# ux = Ux(20, 3, device)
-# ux_optimizer = torch.optim.Adam(ux.parameters(), lr=1e-3)
-# #%%
-# for i in range(1000):
-#     ux_optimizer.zero_grad()
-#     x = pD.rvs(size=1000)
-#     x = torch.tensor(x, device=device, dtype=torch.float32, requires_grad=False)[:,None]
-#     up_dx = (ux(x+hx) * pxt(x+hx, ts) - ux(x-hx) * pxt(x-hx, ts))/(2*hx)
-#     pxt_dts = pxt.dt(x, ts)
-#     l_fp = ((pxt_dts + up_dx)**2).mean()
-
-#     l_fp.backward()
-#     print(f'{i} l_fp={float(l_fp):.5f}')
-
-#     ux_optimizer.step()
 #%%
 plt.title('Loss curves')
 plt.plot(l_fps[10:], label='l_fp')
@@ -281,16 +267,28 @@ plt.legend()
 # %%
 # Plot the predicted p(x,t) at each timestep t
 colors = matplotlib.colormaps.get_cmap('viridis')
-xs = x0
+viridis = matplotlib.colormaps.get_cmap('viridis')
+greys = matplotlib.colormaps.get_cmap('Greys')
+purples = matplotlib.colormaps.get_cmap('Purples')
+low = float(X1.min())
+high = float(X1.max())
+l = low-.25*(high-low) 
+h = high+.25*(high-low)
+xs = torch.arange(l, h, .01, device=device)[:,None]
 
 pxts = pxt(xs, ts).squeeze().T.cpu().detach().numpy()
 uxs = ux(xs).squeeze().cpu().detach().numpy()
-xs = xs.squeeze().cpu().detach().numpy()
+up_dx = (ux(xs+hx) * pxt(xs+hx, ts) - ux(xs-hx) * pxt(xs-hx, ts))/(2*hx)
+pxt_dts = pxt.dt(xs, ts)
+up_dx = up_dx.detach().cpu().numpy()[:,:,0]
+pxt_dts = pxt_dts.detach().cpu().numpy()[:,:,0]
 
+xs = xs.squeeze().cpu().detach().numpy()
+#%%
 plt.title('p(x,t)')
 plt.plot(xs,  pD.pdf(xs), c='k', alpha=1)
 plt.plot(xs, pD0.pdf(xs), c='k', alpha=1)
-for i in range(0, ts.shape[0], 10):
+for i in range(0, ts.shape[0], len(ts)//10):
     t = ts[i]
     plt.plot(xs, pxts[:,i], c=colors(float(t)))
 plt.xlabel('x')
@@ -339,28 +337,36 @@ ax2 = ax1.twinx()
 ax2.plot(xs, pD.pdf(xs), c='k', alpha=1, label='p(x)')
 ax2.set_ylabel('p(x)')
 fig.legend()
+#%%
+# Plot the Fokker Planck terms
+for i in range(1):#0,len(ts),len(ts)//10):
+    plt.plot(xs, pxt_dts[i,:], c='r')
+    plt.plot(xs, up_dx[i,:], c='blue')
+labels = ['d/dt p(x,t)', 'd/dx u(x) p(x,t)']
+plt.legend(labels)
 # %%
 # Euler-Maruyama method for solving stochastic differential equations
-# This is a simple test to see if the Euler-Maruyama method can reproduce the
+# This is a test to see if the Euler-Maruyama method can reproduce the
 # Fokker-Planck equation solution
 # dX = u(X)dt + sigma(X)dW
 # Sample from the initial distribution
 x = pD0.rvs(size=1000)
 x = torch.tensor(x, device=device, dtype=torch.float32, requires_grad=False)[:,None]
 xts = []
-ts = torch.linspace(0, 1, 500, device=device, requires_grad=False)
+ts = torch.linspace(0, 1, 100, device=device, requires_grad=False)
 ht = ts[1] - ts[0]
+dx_means = []
 for t in ts:
     # Compute the drift term
     u = ux(x)
     # Compute the diffusion term
-    # Generate a set of random numbers
     dW = torch.randn_like(x) * torch.sqrt(ht)
     sigma = torch.ones_like(x)
     # Compute the change in x
     dx = u * ht + sigma * dW
     # Update x
     x = x + dx
+    dx_means.append(float(dx.mean()))
     # Boundary Condition for gene expression data: Ensure that x is non-negative
     x[x<0] = 0
     xts.append(x.cpu().detach().numpy())
@@ -369,9 +375,9 @@ xts = np.concatenate(xts, axis=1)
 # Plot the resulting probability densities at each timestep
 low = float(xs.min())
 high = float(xs.max())
-bins = np.linspace(low, high, 30)
+bins = np.linspace(low, high, 100)
 w = bins[1] - bins[0]
-for i in range(0, ts.shape[0], ts.shape[0]//10):
+for i in range(0, ts.shape[0]-1, ts.shape[0]//10):
     t = ts[i]
     heights,bins = np.histogram(xts[:,i], 
                                 bins=bins,
@@ -384,14 +390,24 @@ ranges = np.linspace(0, pxts.shape[0]-1, len(bins), dtype=int)
 pxt_bins = np.add.reduceat(pxts, ranges, axis=0) 
 pxt_bins = pxt_bins / pxt_bins.sum(axis=0)
 
-for i in range(0, pxts.shape[1], pxts.shape[1]//10):
-    t = ts[i]
-    plt.plot(bins, pxt_bins[:,i], color='blue', alpha=.2)
-labels = ['Simulation', 'Fokker-Planck theoretical']
-artists = [plt.Line2D([0], [0], color=c, alpha=.2) for c in ['red', 'blue']]
-plt.legend(artists, labels)
-plt.title('p(x,t)')
+# for i in range(0, pxts.shape[1], pxts.shape[1]//10):
+#     plt.plot(bins, pxt_bins[:,i], color='blue', alpha=.2)
+# labels = ['Simulation', 'Fokker-Planck theoretical']
+# artists = [plt.Line2D([0], [0], color=c, alpha=.2) for c in ['red', 'blue']]
+# plt.legend(artists, labels)
+sm = plt.cm.ScalarMappable(cmap=colors, norm=plt.Normalize(vmin=0, vmax=1))
+sm.set_array([])
+plt.colorbar(sm, label='timestep - t')
+plt.xlabel('x')
+plt.ylabel('p(x,t)')
+plt.title('p(x,t) Simulation')
 
+#%%
+# Plot the mean of the change in x at each timestep
+plt.title('Mean of dX')
+plt.plot(dx_means)
+plt.xlabel('timestep (t)')
+plt.ylabel('Mean of dX')
 #%%
 # Plot the cumulative distribution of the simulated data at each timestep
 sim_pxts = np.zeros((bins.shape[0]-1, ts.shape[0]))
@@ -409,6 +425,8 @@ plt.title('Cumulative mean of p(x,t)')
 plt.imshow(sim_cum_pxt, aspect='auto', interpolation='none', cmap='viridis')
 plt.ylabel('x')
 plt.xlabel('timestep (t)')
+plt.xticks(np.arange(0, ts.shape[0], ts.shape[0]//10), [f'{x:.1f}' for x in np.linspace(0, 1, 10)])
+plt.yticks(np.arange(0, bins.shape[0], bins.shape[0]//10), [f'{x:.1f}' for x in np.linspace(xs.min(), xs.max(), 10)])
 plt.colorbar() 
 
 #%%

@@ -64,10 +64,20 @@ for cluster,term,pval,genes in cluster_enrichment:
         cluster_terms[cluster].append((term,pval,genes))
 cluster_assignments = pickle.load(open('../data/louvain_clusters.pickle', 'rb'))
 #%%
+# Setup the PCA 
+from sklearn.decomposition import PCA
+pca = PCA()
+# Set the PC mean and components
+pca.mean_ = mut.uns['pca_mean']
+pca.components_ = mut.uns['PCs']
+X_pca_wt = pca.transform(wt.X.toarray()) 
+X_pca_mut = pca.transform(mut.X.toarray())
+#%%
 # Plot the UMAP embedding of the filtered data colored by the total gene expression of each cluster
 # Normalize the expression of each cluster
-wt_expression_sum_nrm = wt.obsm['cluster_sums']/(wt.obsm['cluster_sums'].max(axis=0))
-mut_expression_sum_nrm = mut.obsm['cluster_sums']/(mut.obsm['cluster_sums'].max(axis=0))
+max_expression = np.max(np.vstack((wt.obsm['cluster_sums'].max(axis=0), mut.obsm['cluster_sums'].max(axis=0))), axis=0)
+wt_expression_sum_nrm = wt.obsm['cluster_sums']/max_expression
+mut_expression_sum_nrm = mut.obsm['cluster_sums']/max_expression
 
 # Filter words that are relevant to development
 positive_words = ['develop', 'signal', 'matrix', 
@@ -83,11 +93,11 @@ for i in range(n_clusters):
         for genotype in ['wildtype', 'mutant']:
             if genotype == 'wildtype':
                 ax = axs[0]
-                X = wt.obsm['X_umap']
+                X = X_pca_wt
                 expression_sum_nrm = wt_expression_sum_nrm
             else:
                 ax = axs[1]
-                X = mut.obsm['X_umap']
+                X = X_pca_mut
                 expression_sum_nrm = mut_expression_sum_nrm
             # Plot the UMAP embedding of the filtered data colored by
             #  the total gene expression of each cluster
@@ -121,7 +131,7 @@ for i in range(n_clusters):
             # Add blank space to the bottom of the plot to accomodate the text
             # Remove the axis labels and ticks
 
-        umap_axes(axs)
+        umap_axes(axs);
 
         _=plt.subplots_adjust(bottom=.4, left=.05)
         # Add the terms to the plot as text in the middle of the figure below the axes

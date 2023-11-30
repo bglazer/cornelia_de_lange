@@ -6,9 +6,10 @@ import networkx as nx
 from tqdm import tqdm
 
 #%%
-tmstp = '20230607_165324'
-
-genotype = 'wildtype'
+# genotype = 'wildtype'
+# tmstp = '20230607_165324'
+genotype = 'mutant'
+tmstp = '20230608_093734'
 mut = sc.read_h5ad(f'../../data/{genotype}_net.h5ad')
 cell_types = {c:i for i,c in enumerate(set(mut.obs['cell_type']))}
 outdir = f'../../output/{tmstp}'
@@ -45,6 +46,10 @@ for target,active_idxs in target_active_idxs.items():
         target_active_genes[target_id] = active_ids
     else:
         target_active_genes[target_id] = []
+# %%
+# Save the active genes
+with open(f'../../output/{tmstp}/optimal_{genotype}_active_inputs.pickle', 'wb') as f:
+    pickle.dump(target_active_genes, f)
 # %%
 # Create a graph of the active genes
 graph = nx.DiGraph()

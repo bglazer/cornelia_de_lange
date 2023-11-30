@@ -24,24 +24,25 @@ cell_types = list(set(wt_ct.index).union(set(mut_ct.index)))
 # between the wildtype and mutant to get a null distribution
 n_iter = 10_000
 rand_diffs = np.zeros((n_iter, len(cell_types)))
-wt.obs['condition'] = ['wildtype'] * wt.shape[0]
-mut.obs['condition'] = ['mutant'] * mut.shape[0]
-combined = wt.concatenate(mut)
-
+wt_rows = np.array(wt.obs['cell_type'].values)
+mut_rows = np.array(mut.obs['cell_type'].values)
+combined = np.concatenate((wt_rows, mut_rows))
+cell_types = np.unique(combined)
+#%%
 for i in range(n_iter):
     # Combine the cells from the wildtype and mutant
     # Randomly shuffle the cell type labels
-    combined.obs['cell_type'] = np.random.permutation(combined.obs['cell_type'])
+    shuffled_idxs = np.random.permutation(len(combined))
     # Split the combined dataset back into wildtype and mutant
-    wt_rand = combined[combined.obs['condition'] == 'wildtype']
-    mut_rand = combined[combined.obs['condition'] == 'mutant']
-    # Compute the cell type counts
-    wt_ct_rand = wt_rand.obs['cell_type'].value_counts()/wt_rand.shape[0]
-    mut_ct_rand = mut_rand.obs['cell_type'].value_counts()/mut_rand.shape[0]
+    wt_rand = combined[shuffled_idxs[0:wt.shape[0]]]
+    mut_rand = combined[shuffled_idxs[wt.shape[0]:]]
+    # Count the percentage of cells of each type
+    wt_rand_ct = np.array([np.sum(wt_rand == ct) for ct in cell_types])/wt_rand.shape[0]
+    mut_rand_ct = np.array([np.sum(mut_rand == ct) for ct in cell_types])/mut_rand.shape[0]
 
-    # Compute the difference in cell type counts
-    diff = np.abs(mut_ct_rand - wt_ct_rand)
-    rand_diffs[i] = diff
+    # Compute the difference in cell type percentages
+    rand_diffs[i,:] = np.abs(wt_rand_ct - mut_rand_ct)
+
 
 # %%
 p99 = np.percentile(rand_diffs, 99, axis=0)
@@ -53,8 +54,12 @@ wt_ct = wt_ct[cell_types]
 mut_ct = mut_ct[cell_types]
 # Side by side bar plots
 width = .5
-axs.bar(np.arange(len(cell_types)), wt_ct, width=width/2, label='Wildtype')
-axs.bar(np.arange(len(cell_types))+width/2, mut_ct, width=width/2, label='Mutant')
+axs.bar(np.arange(len(cell_types)), wt_ct, width=width/2, label='Wildtype', color='#9BA2FF')
+axs.bar(np.arange(len(cell_types))+width/2, mut_ct, width=width/2, label='Mutant', color='#EF946C')
+# Add an error bar for the 99th percentile of the null distribution
+axs.errorbar(np.arange(len(cell_types)), wt_ct, yerr=p99/2, fmt='none', capsize=5, color='black')
+axs.errorbar(np.arange(len(cell_types))+width/2, mut_ct, yerr=p99/2, fmt='none', capsize=5, label='99th percentile', color='black')
+
 
 plt.title('Cell type counts, Wildtype vs Mutant', fontsize=20)
 sig_cell_types = [ct + '\n***' if diff[ct] > p99[i] else ct for i, ct in enumerate(cell_types)]

@@ -44,28 +44,25 @@ wt_mediated_interactions = pickle.load(open(f'{wt_outdir}/mediated_interactions_
 mut_mediated_interactions = pickle.load(open(f'{mut_outdir}/mediated_interactions_mutant.pickle', 'rb'))
 #%%
 wt_cell_type_ko_proportions = {}
-
 for i, mediator in enumerate(wt_mediated_interactions):
     mediator_gene_name = protein_id_name[mediator]
     # Load the knockout results
-    with open(f'{wt_ko_dir}/{mediator_gene_name}_mediator_knockout_cell_type_proportions_wildtype.pickle', 'rb') as f:
+    with open(f'{wt_ko_dir}/data/{mediator_gene_name}_wildtype_mediator_knockout_cell_type_proportions.pickle', 'rb') as f:
         wt_ko_cell_type_proportions = pickle.load(f)
-    wt_perturb_cell_proportions, wt_baseline_cell_proportions = wt_ko_cell_type_proportions
+        wt_perturb_cell_proportions, wt_baseline_cell_proportions = wt_ko_cell_type_proportions
 
-    with open(f'{wt_ko_dir}/{mediator_gene_name}_mediator_knockout_cell_type_proportions_wildtype.pickle', 'rb') as f:
         wt_cell_type_ko_proportions[mediator] = {}
         for i,cell_type in enumerate(cell_types):
             wt_cell_type_ko_proportions[mediator][cell_type] = wt_perturb_cell_proportions[i]
-mut_cell_type_ko_proportions = {}
 
+mut_cell_type_ko_proportions = {}
 for i, mediator in enumerate(mut_mediated_interactions):
     mediator_gene_name = protein_id_name[mediator]
     # Load the knockout results
-    with open(f'{mut_ko_dir}/{mediator_gene_name}_mediator_knockout_cell_type_proportions_mutant.pickle', 'rb') as f:
+    with open(f'{mut_ko_dir}/data/{mediator_gene_name}_mutant_mediator_knockout_cell_type_proportions.pickle', 'rb') as f:
         mut_ko_cell_type_proportions = pickle.load(f)
-    mut_perturb_cell_proportions, mut_baseline_cell_proportions = mut_ko_cell_type_proportions
+        mut_perturb_cell_proportions, mut_baseline_cell_proportions = mut_ko_cell_type_proportions
 
-    with open(f'{mut_ko_dir}/{mediator_gene_name}_mediator_knockout_cell_type_proportions_mutant.pickle', 'rb') as f:
         mut_cell_type_ko_proportions[mediator] = {}
         for i,cell_type in enumerate(cell_types):
             mut_cell_type_ko_proportions[mediator][cell_type] = mut_perturb_cell_proportions[i]
@@ -122,6 +119,10 @@ mut_mean = np.mean(mut_data.X.toarray(), axis=0)
 mut_mean = np.array(mut_mean).flatten()
 mut_sorted_mean_idxs = np.argsort(mut_mean)[::-1]
 #%%
+# Get the list of robust mediators
+wt_robust_mediators = pickle.load(open(f'{wt_outdir}/robust_mediators_wildtype.pickle', 'rb'))
+mut_robust_mediators = pickle.load(open(f'{mut_outdir}/robust_mediators_mutant.pickle', 'rb'))
+#%%
 wt_mean_sorted_genes = {idx_to_node[idx]: i for i,idx in enumerate(wt_sorted_mean_idxs)}
 wt_var_sorted_genes = {idx_to_node[idx]: i for i,idx in enumerate(wt_sorted_var_idxs)}
 mut_mean_sorted_genes = {idx_to_node[idx]: i for i,idx in enumerate(mut_sorted_mean_idxs)}
@@ -131,7 +132,9 @@ mut_var_sorted_genes = {idx_to_node[idx]: i for i,idx in enumerate(mut_sorted_va
 # Write a table
 # Print the table
 rows = []
-headers = ["Mediator", "WT Cell Type Change", "Mutant Cell Type Change", "Difference", 'WT/Mut Mean Rank', 'WT/Mut Variance Rank',]
+relevant_mediators = []
+headers = ['Mediator ID', "Mediator", "WT Cell Type Change", "Mutant Cell Type Change", "Difference", 
+           'WT/Mut Mean Rank', 'WT/Mut Variance Rank', 'WT Robust', 'Mutant Robust']
 for mediator, diff in sorted_diffs:
     # Get the list of genes that are significantly mediated by this mediator
     mediator_gene = protein_id_name[mediator]
@@ -157,13 +160,18 @@ for mediator, diff in sorted_diffs:
         mut_mean_rank = 'NA'
         mut_var_rank = 'NA'
 
+    # if (diff > 0 and mediator in wt_robust_mediators) or (diff < 0 and mediator in mut_robust_mediators):
+    relevant_mediators.append(mediator)
     rows.append([
+        f'{mediator:10s}',
         f'{protein_id_name[mediator]:10s}',
         f'{wt_cell_type_diff_sum:4f}',
         f'{mut_cell_type_diff_sum:4f}',
         f'{diff:4f}',
         f'{wt_mean_rank}/{mut_mean_rank}',
         f'{wt_var_rank}/{mut_var_rank}',
+        f'{mediator in wt_robust_mediators}',
+        f'{mediator in mut_robust_mediators}'
     ])
 
 print(tabulate(rows, headers=headers))
@@ -171,9 +179,134 @@ print(tabulate(rows, headers=headers))
 
 # %%
 # Print the mediated interactions for each mediator
-for cell_type_diff_sum, mediator, cell_type_diffs in sorted_diffs:
+for mediator, diff in sorted_diffs:
     mediator_gene = protein_id_name[mediator]
-    print(f'{mediator_gene:10s} {cell_type_diff_sum:4f}')
-    for source, target in mediated_interactions[mediator]:
-        print(f'    {protein_id_name[source]:10s} -> {protein_id_name[target]:10s}')
-    print('-'*80)
+    print(f'{mediator_gene:10s} {diff: 4f}')
+    if mediator in wt_mediated_interactions:
+        wt_mediated = wt_mediated_interactions[mediator]
+    else:
+        wt_mediated = []
+    if mediator in mut_mediated_interactions:
+        mut_mediated = mut_mediated_interactions[mediator]
+    else:
+        mut_mediated = []
+
+    all_mediated = set(wt_mediated).union(set(mut_mediated))
+    for src_dst in sorted(all_mediated):
+        src, dst = src_dst
+        src_gene = protein_id_name[src]
+        dst_gene = protein_id_name[dst]
+        print(f'    {src_gene:10s} -> {dst_gene:10s} '
+              f'WT: {"y" if src_dst in wt_mediated else "n"} Mut: {"y" if src_dst in mut_mediated else "n"}')
+# %%
+# #%%
+# %load_ext autoreload
+# %autoreload 2
+# %matplotlib inline
+# #%%
+# from plotting import optimize_placement, plot_paths
+# import matplotlib.pyplot as plt
+# import networkx as nx
+# #%%
+
+# for mediator, diff in sorted_diffs[1:2]:
+#     mediator_gene = protein_id_name[mediator]
+#     print(f'{mediator_gene:10s} {diff: 4f}')
+#     if mediator in wt_mediated_interactions:
+#         wt_mediated = wt_mediated_interactions[mediator]
+#     else:
+#         wt_mediated = []
+#     if mediator in mut_mediated_interactions:
+#         mut_mediated = mut_mediated_interactions[mediator]
+#     else:
+#         mut_mediated = []
+
+#     all_mediated = set(wt_mediated).union(set(mut_mediated))
+#     all_paths = []
+#     for src, dst in sorted(all_mediated):
+#         for path in nx.shortest_paths.all_shortest_paths(graph.to_undirected(), src, dst):
+#             if mediator in path:
+#                 all_paths.append(path)
+#     # Reverse order of paths
+#     for path in all_paths:
+#         path.reverse()
+#     optimized_placement = optimize_placement(all_paths, verbose=False)
+#     plot_paths(optimized_placement, all_paths, center=True)
+#%%
+import networkx as nx
+# from pyvis.network import Network
+import matplotlib.pyplot as plt
+
+graph = pickle.load(open(f'../../data/filtered_graph.pickle', 'rb'))
+#%%
+for mediator in relevant_mediators:
+    mediator_gene = protein_id_name[mediator]
+    print(f'{mediator_gene:10s}')
+    if mediator in wt_mediated_interactions:
+        wt_mediated = wt_mediated_interactions[mediator]
+    else:
+        wt_mediated = []
+    if mediator in mut_mediated_interactions:
+        mut_mediated = mut_mediated_interactions[mediator]
+    else:
+        mut_mediated = []
+
+    all_mediated = set(wt_mediated).union(set(mut_mediated))
+    all_paths = []
+    for src, dst in sorted(all_mediated):
+        for path in nx.shortest_paths.all_shortest_paths(graph.to_undirected(), src, dst):
+            if mediator in path:
+                all_paths.append(path)
+    max_len = max([len(path) for path in all_paths])
+    # Print all the paths with the mediator in the middle
+    mediator_idx = max_len // 2 + 2
+    for path in all_paths:
+        cols = [f'{"":12s}' for i in range(max_len*2)]
+        start_idx = mediator_idx - path.index(mediator)
+        for i, node in enumerate(path):
+            cols[i+start_idx] = f'{i} {protein_id_name[node]:10s}'
+        print(''.join(cols))
+        # print(len(path)/2, start_idx)
+    print('-'*100)
+
+#%%
+for mediator in relevant_mediators:
+    mediator_gene = protein_id_name[mediator]
+    print(f'{mediator_gene:10s}')
+    if mediator in wt_mediated_interactions:
+        wt_mediated = wt_mediated_interactions[mediator]
+    else:
+        wt_mediated = []
+    if mediator in mut_mediated_interactions:
+        mut_mediated = mut_mediated_interactions[mediator]
+    else:
+        mut_mediated = []
+
+    all_mediated = set(wt_mediated).union(set(mut_mediated))
+    all_paths = []
+    for src, dst in sorted(all_mediated):
+        for path in nx.shortest_paths.all_shortest_paths(graph.to_undirected(), src, dst):
+            if mediator in path:
+                all_paths.append(path)
+    # Create a graph from the list of paths
+    path_graph = nx.DiGraph()
+    for path in all_paths:
+        for i in range(len(path)-1):
+            n1 = protein_id_name[path[i]]
+            n2 = protein_id_name[path[i+1]]
+            path_graph.add_edge(n1,n2)
+
+    colors = {node: 'grey' for node in path_graph.nodes}
+    for path in all_paths:
+        src = protein_id_name[path[0]]
+        dst = protein_id_name[path[-1]]
+        colors[src] = 'green'
+        colors[dst] = 'red'
+    colors[protein_id_name[mediator]] = 'yellow'
+
+    nx.draw_kamada_kawai(path_graph, with_labels=True, font_size=10, node_color=colors.values())
+    plt.show()
+# nt = Network('500px', '500px', notebook=True, cdn_resources='in_line')
+# nt.from_nx(path_graph)
+# nt.show('nx.html')
+# %%

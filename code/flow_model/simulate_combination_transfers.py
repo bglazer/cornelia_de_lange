@@ -40,9 +40,9 @@ src_data = sc.read_h5ad(f'../../data/{source_genotype}_net.h5ad')
 tgt_outdir = f'../../output/{tgt_tmstp}'
 src_outdir = f'../../output/{src_tmstp}'
 transfer = f'{source_genotype}_to_{target_genotype}'
-transfer_dir = f'{tgt_outdir}/{transfer}_targeted_transfer_simulations'
-pltdir = f'{tgt_outdir}/{transfer}_targeted_transfer_simulations/figures'
-datadir = f'{tgt_outdir}/{transfer}_targeted_transfer_simulations/data'
+transfer_dir = f'{tgt_outdir}/{transfer}_combination_transfer_simulations'
+pltdir = f'{tgt_outdir}/{transfer}_combination_transfer_simulations/figures'
+datadir = f'{tgt_outdir}/{transfer}_combination_transfer_simulations/data'
 
 #%%
 # Check if the output directories exists. This is where we will save the transfer simulations and figures
@@ -112,18 +112,20 @@ tgt_Xgpu = tgt_X.to(device)
 baseline_trajectories = pickle.load(open(f'{src_outdir}/baseline_trajectories_{source_genotype}.pickle', 'rb'))
 baseline_trajectories_np = baseline_trajectories
 baseline_idxs = pickle.load(open(f'{src_outdir}/baseline_nearest_cell_idxs_{source_genotype}.pickle', 'rb'))
-baseline_velo,_ = plotting.compute_velo(model=model, X=src_X, numpy=True)
-baseline_X = baseline_trajectories_np.reshape(-1, num_nodes)
+# baseline_velo,_ = plotting.compute_velo(model=model, X=src_X, numpy=True)
+# baseline_X = baseline_trajectories_np.reshape(-1, num_nodes)
 baseline_cell_proportions, baseline_cell_errors = plotting.calculate_cell_type_proportion(baseline_idxs, src_data, cell_types, n_repeats, error=True)
 
 #%%
 num_gpus = 4
-def simulate_transfer(transfer_genes, i, repeats):
+def simulate_transfer(transfer_genes, idx):
+    # For testing purposes return a random cell type proportion of the same shape as the baseline
+    # return transfer_genes, np.random.rand(*baseline_cell_proportions.shape), np.random.rand(*baseline_cell_proportions.shape)
     transfer_gene_names = [protein_id_name[gene] for gene in transfer_genes]
-    print(f'Transfer Genes {",".join(transfer_gene_names):10s}: '
-          f'({i+1})', flush=True)
+    # print(f'Transfer Genes {",".join(transfer_gene_names):10s}: '
+    #       f'({idx+1})', flush=True)
     
-    gpu = i % num_gpus
+    gpu = idx % num_gpus
     device = f'cuda:{gpu}'
 
     # Re-initialize the model and simulator at each iteration
@@ -146,115 +148,66 @@ def simulate_transfer(transfer_genes, i, repeats):
         tgt_gene_model.load_state_dict(src_gene_model.state_dict())
     Xgpu = tgt_X.to(device)
     simulator = Simulator(tgt_model, Xgpu, device=device, boundary=False, show_progress=False)
-    repeats = repeats.to(device)
-    perturb_trajectories, perturb_nearest_idxs = simulator.simulate(repeats, t_span)
+    repeats_gpu = repeats.to(device)
+    perturb_trajectories, perturb_nearest_idxs = simulator.simulate(repeats_gpu, t_span)
     perturb_trajectories_np = util.tonp(perturb_trajectories)
+    perturb_idxs_np = util.tonp(perturb_nearest_idxs)
     # Delete full trajectories so that we can free the GPU memory
     del perturb_trajectories
     del perturb_nearest_idxs
-    perturb_idxs_np = util.tonp(perturb_nearest_idxs)
+    # Tell the garbage collector to free the GPU memory
+    torch.cuda.empty_cache()
     # Aggregate the individual cell trajectories by mean
     mean_trajectories = perturb_trajectories_np.mean(axis=1)
     # Save the mean trajectories
-    with open(f'{datadir}/{"_".join(transfer_gene_names)}_{transfer}_transfer_mean_trajectories.pickle', 'wb') as f:
-        pickle.dump(mean_trajectories, f)
+    with open(f'{datadir}/combination_{idx}_{transfer}_transfer_mean_trajectories.pickle', 'wb') as f:
+        mean_trajectory_dict = {'transfer_genes': transfer_genes,
+                                'mean_trajectories': mean_trajectories,}
+        pickle.dump(mean_trajectory_dict, f)
 
-    # plotting.time_distribution(perturb_trajectories_np[:,:], pca,
-    #                            label=f'{", ".join(transfer_gene_names)} Combination Transfer',
-    #                            baseline=baseline_X)
-    # plt.savefig(f'{pltdir}/{"_".join(transfer_gene_names)}_{transfer}_transfer_time_distribution.png',
-    #             bbox_inches='tight')
-    # plt.close()
-    # plotting.cell_type_distribution(perturb_trajectories_np[:,:], 
-    #                                 perturb_idxs_np[:,:],
-    #                                 tgt_data,
-    #                                 cell_types,
-    #                                 pca,
-    #                                 label=f'{", ".join(transfer_gene_names)} Combination Transfer',
-    #                                 baseline=baseline_X)
-    # plt.savefig(f'{pltdir}/{"_".join(transfer_gene_names)}_{transfer}_transfer_cell_type_distribution.png',
-    #             bbox_inches='tight')
-    # plt.close()
-    # velo,_ = plotting.compute_velo(model=simulator.model, X=Xgpu, perturbation=None, numpy=True)
-    # plotting.arrow_grid(velos=[velo, baseline_velo], 
-    #                     data=[tgt_data, src_data], 
-    #                     pca=pca, 
-    #                     labels=[f'{", ".join(transfer_gene_names)} Combination Transfer', f'{target_genotype.capitalize()} baseline'])
-    # plt.savefig(f'{pltdir}/{"_".join(transfer_gene_names)}_{transfer}_transfer_arrow_grid.png')
-    # plt.close()
-    
-    # trajectories = plotting.compare_cell_type_trajectories([perturb_idxs_np, baseline_idxs],
-    #                                                        [tgt_data, src_data], 
-    #                                                        cell_types,
-    #                                                        ["Combination Transfer", f'{source_genotype.capitalize()} baseline'])
-    # # Save the trajectories
-    # with open(f'{datadir}/{"_".join(transfer_gene_names)}_{transfer}_transfer_cell_type_trajectories.pickle', 'wb') as f:
-    #     pickle.dump(trajectories, f)
-    # plt.savefig(f'{pltdir}/{"_".join(transfer_gene_names)}_{transfer}_transfer_cell_type_trajectories.png')
-    # plt.close()
-    # Plot side by side bar charts of the cell type proportions
     perturb_cell_proportions, perturb_cell_errors = plotting.calculate_cell_type_proportion(perturb_idxs_np, tgt_data, cell_types, n_repeats, error=True)
     
-    pickle.dump((perturb_cell_proportions, perturb_cell_errors, 
-                 baseline_cell_proportions, baseline_cell_errors), 
-                open(f'{datadir}/{"_".join(transfer_gene_names)}_{transfer}_transfer_cell_type_proportions.pickle', 'wb'))
-    # Save the cell type proportions
-    # plotting.cell_type_proportions(proportions=(perturb_cell_proportions, 
-    #                                             baseline_cell_proportions), 
-    #                                proportion_errors=(perturb_cell_errors,
-    #                                                   baseline_cell_errors),
-    #                                cell_types=list(cell_types), 
-    #                                labels=[f'{", ".join(transfer_gene_names)} Combination Transfer', f'{target_genotype.capitalize()} baseline'])
-    # plt.savefig(f'{pltdir}/{"_".join(transfer_gene_names)}_{transfer}_transfer_cell_type_proportions.png',
-    #             bbox_inches='tight');
-    # plt.close();
+    proportion_dict = {'transfer_genes': transfer_genes,
+                       'perturb_proportions':perturb_cell_proportions, 
+                       'perturb_errors': perturb_cell_errors}
+    pickle.dump(proportion_dict,
+                open(f'{datadir}/combination_{idx}_{transfer}_transfer_cell_type_proportions.pickle', 'wb'))
+    d = np.abs(perturb_cell_proportions - baseline_cell_proportions).sum()
+    print(f'{d}, {" ".join([protein_id_name[g] for g in transfer_genes])}', flush=True)
     return transfer_genes, perturb_cell_proportions, perturb_cell_errors
 
 #%%
-simulate_transfer(transfer_genes=['ENSMUSP00000134654'], i=0, repeats=repeats)
+simulate_transfer(transfer_genes=['ENSMUSP00000134654'], idx=0)
 
 #%%
-#%%
-# n_genes = 10
-# proportion_distance_individual_genes = pickle.load(open(f'{tgt_outdir}/{transfer}_transfer_simulations/data/proportion_distance.pickle', 'rb'))
-
-# transfer_genes = [gene for gene,distance in proportion_distance_individual_genes[:n_genes]]
-# transfer_gene_names = [protein_id_name[gene] for gene in transfer_genes]
-
-# all_combos = []
-# for i in range(2, len(transfer_genes)+1):
-#     combos = list(combinations(transfer_genes, r=i))
-#     all_combos.extend(combos)
-#%%
-# 
 proportion_distance_individual_genes = pickle.load(open(f'{tgt_outdir}/{transfer}_transfer_simulations/data/proportion_distance.pickle', 'rb'))
 top_combo = (proportion_distance_individual_genes[0][0],)
 
-remaining_genes = [gene for gene,distance in proportion_distance_individual_genes[1:]]
+remaining_genes = [gene for gene,distance in proportion_distance_individual_genes[1:50]]
 
-d = float('inf')
-all_combos = []
-parallel = Parallel(n_jobs=8)
+best_distance = float('inf')
+parallel = Parallel(n_jobs=12)
 # Greedy strategy for finding the combination of genes that minimizes the distance to 
 # the baseline cell type proportions
-while d > .05 and len(remaining_genes) > 0:
-    print(f'Remaining genes: {len(remaining_genes)}')
+idx = 0
+while best_distance > .05 and len(remaining_genes) > 0:
+    all_combos = []
     for gene in remaining_genes:
         combo = top_combo + (gene,)
-        all_combos.append(combo)
-    results = parallel(delayed(simulate_transfer)(transfer_genes, i, repeats) for i,transfer_genes in enumerate(all_combos))
-    # results = [simulate_transfer(transfer_genes, i, repeats) for i,transfer_genes in enumerate(all_combos)]
+        idx += 1
+        all_combos.append((idx,combo))
+
+    results = parallel(delayed(simulate_transfer)(transfer_genes, i) for i, transfer_genes in all_combos)
+    # results = [simulate_transfer(transfer_genes, i) for i,transfer_genes in all_combos]
     # Calculate the distance to the baseline cell type proportions
     combo_distances = []
     for combo, perturb_cell_proportions, perturb_cell_errors in results:
         d = np.abs(perturb_cell_proportions - baseline_cell_proportions).sum()
         combo_distances.append((combo, d))
     top_combo, best_distance = min(combo_distances, key=lambda x: x[1])
+
+    print(f'Remaining genes: {len(remaining_genes)}')
     print(f'Best distance: {best_distance:.3f}')
+    print(f'Best combo: {",".join([protein_id_name[gene] for gene in top_combo])}')
+    print('-'*80)
     remaining_genes = [gene for gene in remaining_genes if gene not in top_combo]
-
-
-    
-#%%
-
-# %%

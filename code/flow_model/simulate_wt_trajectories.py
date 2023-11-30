@@ -76,7 +76,7 @@ wt_trajectories_np = util.tonp(wt_trajectories)
 wt_idxs_np = util.tonp(wt_nearest_idxs)
 Xnp = util.tonp(X)
 #%%
-plotting.distribution(wt_trajectories_np, pca, 'Wildtype')
+plotting.time_distribution(wt_trajectories_np, pca, 'Wildtype')
 #%%
 plotting.arrow_grid(data, pca, model, 'Wildtype', perturbation=None, device=device)
 # %%
