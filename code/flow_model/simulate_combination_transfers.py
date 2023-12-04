@@ -13,13 +13,12 @@ import util
 import numpy as np
 from sklearn.decomposition import PCA
 from simulator import Simulator
-from matplotlib import pyplot as plt
 import plotting
-from textwrap import fill
 from joblib import Parallel, delayed
 import os
-import matplotlib
-from itertools import combinations
+from tabulate import tabulate
+import random
+
 #%%
 os.environ['LD_LIBRARY_PATH'] = '/home/bglaze/miniconda3/envs/cornelia_de_lange/lib/'
 
@@ -76,6 +75,7 @@ num_layers = 3
 
 #%%
 cell_types = {c:i for i,c in enumerate(sorted(set(tgt_data.obs['cell_type'])))}
+idx_to_cell_type = {v:k for k,v in cell_types.items()}
 
 #%%
 # Convert from ids to gene names
@@ -88,24 +88,12 @@ protein_name_id = {v:k for k,v in protein_id_name.items() if k in all_genes}
 
 #%%
 n_repeats = 10
-start_idxs = tgt_data.uns['initial_points_nmp']
+start_idxs = src_data.uns['initial_points_nmp']
 repeats = torch.tensor(start_idxs.repeat(n_repeats)).to(device)
 len_trajectory = tgt_data.uns['best_trajectory_length']
 n_steps = tgt_data.uns['best_step_size']*len_trajectory
 
 t_span = torch.linspace(0, len_trajectory, n_steps)
-
-#%%
-# Load the model
-model = GroupL1FlowModel(input_dim=num_nodes, 
-                         hidden_dim=hidden_dim, 
-                         num_layers=num_layers,
-                         predict_var=True)
-# Here the baseline is the source model because we're looking for transfers that 
-# recapitulate the source model's behavior, using only a few genes from the source model
-model.load_state_dict(source_state_dict)
-model = model.to(device)
-tgt_Xgpu = tgt_X.to(device)
 
 #%%
 # Load the baseline trajectories
@@ -115,16 +103,22 @@ baseline_idxs = pickle.load(open(f'{src_outdir}/baseline_nearest_cell_idxs_{sour
 # baseline_velo,_ = plotting.compute_velo(model=model, X=src_X, numpy=True)
 # baseline_X = baseline_trajectories_np.reshape(-1, num_nodes)
 baseline_cell_proportions, baseline_cell_errors = plotting.calculate_cell_type_proportion(baseline_idxs, src_data, cell_types, n_repeats, error=True)
+#%%
+# src_baseline_trajectories = pickle.load(open(f'{src_outdir}/baseline_trajectories_{source_genotype}.pickle', 'rb'))
+# src_baseline_trajectories_np = src_baseline_trajectories
+# src_baseline_idxs = pickle.load(open(f'{src_outdir}/baseline_nearest_cell_idxs_{source_genotype}.pickle', 'rb'))
+# src_baseline_cell_proportions, src_baseline_cell_errors = plotting.calculate_cell_type_proportion(src_baseline_idxs, src_data, cell_types, n_repeats, error=True)
+
+# tgt_baseline_trajectories = pickle.load(open(f'{tgt_outdir}/baseline_trajectories_{target_genotype}.pickle', 'rb'))
+# tgt_baseline_trajectories_np = tgt_baseline_trajectories
+# tgt_baseline_idxs = pickle.load(open(f'{tgt_outdir}/baseline_nearest_cell_idxs_{target_genotype}.pickle', 'rb'))
+# tgt_baseline_cell_proportions, tgt_baseline_cell_errors = plotting.calculate_cell_type_proportion(tgt_baseline_idxs, tgt_data, cell_types, n_repeats, error=True)
 
 #%%
 num_gpus = 4
-def simulate_transfer(transfer_genes, idx):
+def simulate_transfer(transfer_genes, idx, label):
     # For testing purposes return a random cell type proportion of the same shape as the baseline
     # return transfer_genes, np.random.rand(*baseline_cell_proportions.shape), np.random.rand(*baseline_cell_proportions.shape)
-    transfer_gene_names = [protein_id_name[gene] for gene in transfer_genes]
-    # print(f'Transfer Genes {",".join(transfer_gene_names):10s}: '
-    #       f'({idx+1})', flush=True)
-    
     gpu = idx % num_gpus
     device = f'cuda:{gpu}'
 
@@ -146,11 +140,10 @@ def simulate_transfer(transfer_genes, idx):
         src_gene_model = src_model.models[model_idx]
         tgt_gene_model = tgt_model.models[model_idx]
         tgt_gene_model.load_state_dict(src_gene_model.state_dict())
-    Xgpu = tgt_X.to(device)
-    simulator = Simulator(tgt_model, Xgpu, device=device, boundary=False, show_progress=False)
+    simulator = Simulator(tgt_model, src_X.to(device), device=device, boundary=False, show_progress=False)
     repeats_gpu = repeats.to(device)
     perturb_trajectories, perturb_nearest_idxs = simulator.simulate(repeats_gpu, t_span)
-    perturb_trajectories_np = util.tonp(perturb_trajectories)
+    # perturb_trajectories_np = util.tonp(perturb_trajectories)
     perturb_idxs_np = util.tonp(perturb_nearest_idxs)
     # Delete full trajectories so that we can free the GPU memory
     del perturb_trajectories
@@ -158,56 +151,142 @@ def simulate_transfer(transfer_genes, idx):
     # Tell the garbage collector to free the GPU memory
     torch.cuda.empty_cache()
     # Aggregate the individual cell trajectories by mean
-    mean_trajectories = perturb_trajectories_np.mean(axis=1)
+    # mean_trajectories = perturb_trajectories_np.mean(axis=1)
     # Save the mean trajectories
-    with open(f'{datadir}/combination_{idx}_{transfer}_transfer_mean_trajectories.pickle', 'wb') as f:
-        mean_trajectory_dict = {'transfer_genes': transfer_genes,
-                                'mean_trajectories': mean_trajectories,}
-        pickle.dump(mean_trajectory_dict, f)
+    # with open(f'{datadir}/{label}_combination_{idx}_{transfer}_transfer_mean_trajectories.pickle', 'wb') as f:
+    #     mean_trajectory_dict = {'transfer_genes': transfer_genes,
+    #                             'mean_trajectories': mean_trajectories,}
+    #     pickle.dump(mean_trajectory_dict, f)
 
-    perturb_cell_proportions, perturb_cell_errors = plotting.calculate_cell_type_proportion(perturb_idxs_np, tgt_data, cell_types, n_repeats, error=True)
+    perturb_cell_proportions, perturb_cell_errors = plotting.calculate_cell_type_proportion(perturb_idxs_np, src_data, cell_types, n_repeats, error=True)
     
     proportion_dict = {'transfer_genes': transfer_genes,
                        'perturb_proportions':perturb_cell_proportions, 
                        'perturb_errors': perturb_cell_errors}
-    pickle.dump(proportion_dict,
-                open(f'{datadir}/combination_{idx}_{transfer}_transfer_cell_type_proportions.pickle', 'wb'))
+    with open(f'{datadir}/{label}_combination_{idx}_{transfer}_transfer_cell_type_proportions.pickle', 'wb') as f:
+        pickle.dump(proportion_dict, f)
     d = np.abs(perturb_cell_proportions - baseline_cell_proportions).sum()
     print(f'{d}, {" ".join([protein_id_name[g] for g in transfer_genes])}', flush=True)
     return transfer_genes, perturb_cell_proportions, perturb_cell_errors
 
 #%%
-simulate_transfer(transfer_genes=['ENSMUSP00000134654'], idx=0)
+simulate_transfer(transfer_genes=[], idx=0, label='baseline')
 
 #%%
-proportion_distance_individual_genes = pickle.load(open(f'{tgt_outdir}/{transfer}_transfer_simulations/data/proportion_distance.pickle', 'rb'))
-top_combo = (proportion_distance_individual_genes[0][0],)
+def individual_transfers(all_genes):
+    idx=0
+    parallel = Parallel(n_jobs=12)
+    gene_sets = []
+    for gene in all_genes:
+        gene_sets.append((idx, [gene]))
+        idx+=1
+    label = 'individual'
+    results = parallel(delayed(simulate_transfer)(transfer_genes, i, label) for i, transfer_genes in gene_sets)
 
-remaining_genes = [gene for gene,distance in proportion_distance_individual_genes[1:50]]
+    table = []
+    distances = []
+    headers = ['Distance', 'Num Transfers', 'Cell Types Outside 2 Std Dev', '']
+    for transfer_genes, perturb_cell_proportions, perturb_cell_errors in results:
+        d = np.abs(perturb_cell_proportions - baseline_cell_proportions)
+        # Check if the perturb cell proportions are within 2 standard deviations of the baseline
+        misses = (d > 2*perturb_cell_errors + 2*baseline_cell_errors)
+        table.append((protein_id_name[transfer_genes[0]], d.sum(), len(transfer_genes), misses.sum(),
+                      ' '.join([idx_to_cell_type[miss_idx] for miss_idx in np.where(misses)[0]])))
+        distances.append((d, transfer_genes[0]))
+    print(tabulate(table, headers=headers))
+    return distances
+    
+#%%
+individual_transfer_baseline_distances = individual_transfers(all_genes)
+pickle.dump(individual_transfer_baseline_distances, open(f'{datadir}/individual_transfer_baseline_distances.pickle', 'wb'))
+#%%
+# Find the minimum number of transfers out of an ordered list of genes needed to 
+# recapitulate the source behavior in the target model
+def progressive_transfers(all_genes):
+    idx=0
+    parallel = Parallel(n_jobs=12)
+    # Steps of 10 to minimize computation
+    n_transfers = np.linspace(0, len(all_genes), int(len(all_genes)/10), dtype=int)
+    gene_sets = []
+    
+    for n_transfers in n_transfers:
+        idx+=1
+        genes = all_genes[:n_transfers]
+        gene_sets.append((idx, genes))
 
-best_distance = float('inf')
-parallel = Parallel(n_jobs=12)
+    label = 'progressive'
+    # results = [simulate_transfer(transfer_genes, i) for i, transfer_genes in gene_sets]
+    results = parallel(delayed(simulate_transfer)(transfer_genes, i, label) for i, transfer_genes in gene_sets)
+    return results
+
+def print_progressive_transfers(results):
+    headers = ['Distance', 'Num Transfers', 'Cell Types Outside 2 Std Dev', '']
+    table = []
+    distances = []
+    for transfer_genes, perturb_cell_proportions, perturb_cell_errors in results:
+        d = np.abs(perturb_cell_proportions - baseline_cell_proportions)
+        # Check if the perturb cell proportions are within 2 standard deviations of the baseline
+        misses = (d > (2*perturb_cell_errors + 2*baseline_cell_errors))
+        table.append((d.sum(), len(transfer_genes), misses.sum(),
+                      ' '.join([idx_to_cell_type[miss_idx] for miss_idx in np.where(misses)[0]]),
+                      ' '.join([protein_id_name[g] for g in transfer_genes]), ))
+        distances.append((d, transfer_genes))
+    print(tabulate(table, headers=headers))
+    return distances
+#%%
+# print('Progressive transfers of genes ranked by their individual impact')
+# progressive_transfer_results = progressive_transfers([g for _,g in individual_transfer_baseline_distances])
+# # Randomly shuffle the gene list
+# print('Progressive transfers of randomly shuffled gene list')
+# shuffled_genes = random.sample(all_genes, len(all_genes))
+# progressive_random_results =  progressive_transfers(shuffled_genes)
+# #%%
+# print('Progressive transfers of genes ranked by their individual impact')
+# progressive_transfer_distances = print_progressive_transfers(progressive_transfer_results)
+# print('Progressive transfers of randomly shuffled gene list')
+# progressive_random_distances = print_progressive_transfers(progressive_random_results)
+# pickle.dump(progressive_transfer_distances, open(f'{datadir}/progressive_transfer_distances.pickle', 'wb'))
+# pickle.dump(progressive_random_distances, open(f'{datadir}/progressive_random_distances.pickle', 'wb'))
+
+
+#%%
 # Greedy strategy for finding the combination of genes that minimizes the distance to 
 # the baseline cell type proportions
-idx = 0
-while best_distance > .05 and len(remaining_genes) > 0:
-    all_combos = []
-    for gene in remaining_genes:
-        combo = top_combo + (gene,)
-        idx += 1
-        all_combos.append((idx,combo))
+n_repeats = 10
+for repeat in range(n_repeats):
+    sorted_distances = sorted([(d.sum(),gene) for d,gene in individual_transfer_baseline_distances])
+    # Select a random gene to start
+    random_gene = random.choice(sorted_distances)[1]
+    best_combo = (random_gene,)
+    remaining_genes = [gene for _,gene in sorted_distances if gene not in best_combo]
 
-    results = parallel(delayed(simulate_transfer)(transfer_genes, i) for i, transfer_genes in all_combos)
-    # results = [simulate_transfer(transfer_genes, i) for i,transfer_genes in all_combos]
-    # Calculate the distance to the baseline cell type proportions
-    combo_distances = []
-    for combo, perturb_cell_proportions, perturb_cell_errors in results:
-        d = np.abs(perturb_cell_proportions - baseline_cell_proportions).sum()
-        combo_distances.append((combo, d))
-    top_combo, best_distance = min(combo_distances, key=lambda x: x[1])
+    num_misses = 1
+    idx = 0
+    while num_misses > 0 and len(remaining_genes) > 0:
+        all_combos = []
+        for gene in remaining_genes:
+            combo = best_combo + (gene,)
+            all_combos.append((idx,combo))
+            idx += 1 
+        label = 'greedy'
+        parallel = Parallel(n_jobs=12)
+        results = parallel(delayed(simulate_transfer)(transfer_genes, i, label) for i, transfer_genes in all_combos)
+        # results = [simulate_transfer(transfer_genes, i) for i,transfer_genes in all_combos]
+        # Calculate the distance to the baseline cell type proportions
+        combo_distances = []
+        for combo, perturb_cell_proportions, perturb_cell_errors in results:
+            d = np.abs(perturb_cell_proportions - baseline_cell_proportions)
+            # Check if the perturb cell proportions are within 2 standard deviations of the baseline
+            misses = (d > 2*perturb_cell_errors + 2*baseline_cell_errors)
+            combo_distances.append((d.sum(), combo, misses))
+        best_distance, best_combo, best_misses = min(combo_distances)
+        num_misses = best_misses.sum()
 
-    print(f'Remaining genes: {len(remaining_genes)}')
-    print(f'Best distance: {best_distance:.3f}')
-    print(f'Best combo: {",".join([protein_id_name[gene] for gene in top_combo])}')
-    print('-'*80)
-    remaining_genes = [gene for gene in remaining_genes if gene not in top_combo]
+        print(f'Remaining genes: {len(remaining_genes)}')
+        print(f'Best distance: {best_distance:.3f}')
+        print(f'Best combo: {",".join([protein_id_name[gene] for gene in best_combo])}')
+        print(f'Cell types outside 2 std dev: {",".join([idx_to_cell_type[miss_idx] for miss_idx in np.where(best_misses)[0]])}')
+        print('-'*80)
+        remaining_genes = [gene for gene in remaining_genes if gene not in best_combo]
+        pickle.dump(best_combo, open(f'{datadir}/top_transfer_combination_{repeat}.pickle', 'wb'))
+# %%
