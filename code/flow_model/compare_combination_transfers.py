@@ -227,28 +227,55 @@ n_below = (best_combo_ds < baseline_distance).sum()
 # fontsize offsets, and we would have to calculate the number of chunks and the size of each chunk
 # Generate a bounding box the dimensions of the plot (xlim, ylim), then split it into chunks
 # Each chunk would then be given sequential non-overlapping rectangles to place the labels in
+
+above = []
+below = []
 for i,gene in enumerate(sorted(best_gene_combination, key=lambda x: individual_transfer_rank[x])):
     gene_i = sorted_distances.index((gene, individual_distances[gene]))
-    above = ds[gene_i] > baseline_distance
+    is_above = ds[gene_i] > baseline_distance
+    if is_above:
+        above.append((gene_i, gene))
+    else:
+        below.append((gene_i, gene))
+plt_height = plt.ylim()[1] - plt.ylim()[0]
+plt_height *= .9
+plt_width = plt.xlim()[1] - plt.xlim()[0]
+slot_height = plt_height / len(best_gene_combination)
 
+def add_labels(slots, base_height, above=True):
+    h = base_height 
     if above:
         relpos = (1,0)
-        ytext = 1.5*(-n_below+i+1)
-        xtext = -1*len(protein_id_name[gene])
+        xbuf = 0
     else:
         relpos = (0,0)
-        ytext = -1.5*(n_above-i+1)
-        xtext = 3
+        xbuf = plt_width * .05
+    print(h)
+    
+    for i in range(len(slots)-1):
+        gene_idx, gene_name = slots[i]
+        next_gene_idx  = slots[i+1][0]
+        diff = np.abs(ds[gene_idx] - ds[next_gene_idx])
+        if diff < slot_height:
+            h += slot_height * np.sign(diff)
+        else:
+            h = ds[gene_idx] 
+        ytext = h
+        xtext = x[gene_idx] + xbuf
 
-    plt.annotate(text=protein_id_name[gene], 
-                 xy=(x[gene_i], ds[gene_i]), xycoords='data',
-                 xytext=(xtext, ytext), textcoords='offset fontsize',
-                 arrowprops=dict(arrowstyle='simple', relpos=relpos),
-                 fontsize=8, rotation=0)
+        print(xtext, ytext, diff, slot_height, h)
+        plt.annotate(text=protein_id_name[gene_name], 
+             xy=(x[gene_idx], ds[gene_idx]), xycoords='data',
+             xytext=(xtext, ytext), textcoords='data',
+             arrowprops=dict(arrowstyle='simple, head_width=0.2, tail_width=0.05', relpos=relpos),
+             fontsize=8, rotation=0)
+
+add_labels(above, baseline_distance, above=True)
+add_labels(below, baseline_distance, above=False)
+
 
 plt.xlabel('Transfer Gene')
 plt.xticks([])
 plt.ylabel('Cell Type Proportion Difference')
-plt.tight_layout()
 # TODO 
 # %%

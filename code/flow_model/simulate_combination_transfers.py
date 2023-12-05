@@ -259,10 +259,10 @@ for repeat in range(n_repeats):
     random_gene = random.choice(sorted_distances)[1]
     best_combo = (random_gene,)
     remaining_genes = [gene for _,gene in sorted_distances if gene not in best_combo]
-
+    best_distance = float('inf')
     num_misses = 1
     idx = 0
-    while num_misses > 0 and len(remaining_genes) > 0:
+    while num_misses > 0 and len(remaining_genes) > 0 and best_distance > 0.05:
         all_combos = []
         for gene in remaining_genes:
             combo = best_combo + (gene,)
