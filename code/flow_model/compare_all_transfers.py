@@ -302,7 +302,10 @@ src_common_regulators_expression = np.array([src_mean_expression[node_to_idx[reg
 sorted_common_regulators = np.argsort(tgt_common_regulators_expression + src_common_regulators_expression) 
 common_regulators_expression = np.vstack((tgt_common_regulators_expression, src_common_regulators_expression))
 sorted_common_regulators_expression = common_regulators_expression[:,sorted_common_regulators]
-plt.plot(sorted_common_regulators_expression.T)
-# Label the x axis with the gene names
+plt.bar(x=np.arange(len(common_regulators)), height=sorted_common_regulators_expression.T[:,0], label='Wildtype', alpha=.4)
+plt.bar(x=np.arange(len(common_regulators)), height=sorted_common_regulators_expression.T[:,1], label='Wildtype', alpha=.4)
 plt.xticks(np.arange(len(common_regulators)), [protein_id_name[regulator] for regulator in np.array(common_regulators)[sorted_common_regulators]], rotation=90)
+# plt.bar(x=np.arange(len(common_regulators))*3, height=sorted_common_regulators_expression.T[:,0], label='Wildtype')
+# plt.bar(x=np.arange(len(common_regulators))*3+1, height=sorted_common_regulators_expression.T[:,1], label='Wildtype')
+# Label the x axis with the gene names
 # %%

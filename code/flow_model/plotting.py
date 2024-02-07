@@ -7,6 +7,7 @@ import random
 import torch
 sys.path.append('..')
 import util
+from scipy.stats import gaussian_kde as kde
 
 def time_distribution(trajectories, pca, label, baseline=None):
     # Plot a scatter plot showing the overall distribution of points in the trajectories
@@ -41,7 +42,7 @@ def time_distribution(trajectories, pca, label, baseline=None):
     axs.set_title(f'{label.capitalize()}', fontsize=20)
     
 
-def cell_type_distribution(trajectories, nearest_idxs, data, cell_type_to_idx, pca, label, baseline=None, s=1):
+def cell_type_distribution(trajectories, nearest_idxs, data, cell_type_to_idx, pca, label, baseline=None, s=1, scatter_alpha=0.1):
     # Plot a scatter plot showing the overall distribution of points in the trajectories
     # Get the first two principal components of the data
     t_emb = pca.transform(trajectories.reshape(-1, trajectories.shape[2]))[:,:2]
@@ -61,7 +62,7 @@ def cell_type_distribution(trajectories, nearest_idxs, data, cell_type_to_idx, p
         # plt.plot(t_emb[:,i,0], t_emb[:,i,1], color='black', linewidth=.5, alpha=.1)
         axs.scatter(t_emb[:,i,0], t_emb[:,i,1],
                     color=cell_color_traj[:,i], 
-                    marker='.', s=s, alpha=0.1)
+                    marker='.', s=s, alpha=scatter_alpha)
     # Add a legend outside the plot on the right side with the cell type colors
     plt.legend([matplotlib.patches.Patch(color=color) for color in cell_colors],
                 list(cell_type_to_idx),
@@ -70,14 +71,24 @@ def cell_type_distribution(trajectories, nearest_idxs, data, cell_type_to_idx, p
     
     if baseline is not None:
         baseline_emb = pca.transform(baseline)[:,0:2]
-        # axs.scatter(baseline_emb[:,0], baseline_emb[:,1], color='black', alpha=.2, s=s*.25)
-        xlim = axs.get_xlim()
-        ylim = axs.get_ylim()
-        xedges = np.linspace(xlim[0], xlim[1], 100)
-        yedges = np.linspace(ylim[0], ylim[1], 100)
-        baseline_density, xedges, yedges = np.histogram2d(baseline_emb[:,0], baseline_emb[:,1], bins=[xedges, yedges])
-        # Plot the density as a contour plot
-        axs.contour(xedges[:-1], yedges[:-1], baseline_density.T, cmap='copper', levels=10, linewidths=1)
+        x = baseline_emb[:,0]
+        y = baseline_emb[:,1]
+        xmin, xmax = axs.get_xlim()
+        ymin, ymax = axs.get_ylim()
+        k = kde([x,y])
+        # 1j is the imaginary unit, which is used as a flag to mgrid to tell it 
+        # a number of points to make in the grid
+        xi, yi = np.mgrid[xmin:xmax:x.size**0.5*1j, 
+                        ymin:ymax:y.size**0.5*1j]
+        zi = k(np.vstack([xi.flatten(), yi.flatten()]))
+        axs.contour(xi, yi, zi.reshape(xi.shape), levels=5, cmap='Greys')
+        
+        # # axs.scatter(baseline_emb[:,0], baseline_emb[:,1], color='black', alpha=.2, s=s*.25)
+        # xedges = np.linspace(xlim[0], xlim[1], 100)
+        # yedges = np.linspace(ylim[0], ylim[1], 100)
+        # baseline_density, xedges, yedges = np.histogram2d(baseline_emb[:,0], baseline_emb[:,1], bins=[xedges, yedges])
+        # # Plot the density as a contour plot
+        # axs.contour(xedges[:-1], yedges[:-1], baseline_density.T, cmap='copper', levels=10, linewidths=1)
     
     # Remove the axis labels
     axs.set_xticks([])
@@ -218,6 +229,7 @@ def arrow_grid(velos, data, pca, labels):
         ax.axhline(y, color='white', alpha=.7)
     #Plot the velocity vectors
     ax.scatter(proj[0][:,0], proj[0][:,1], c=cell_colors, s=.7, alpha=.2)
+    # TODO need to make a longer sequence of colors
     arrow_colors = ['#14213d', '#fca311']
     for j in range(num_comparisons):
         for i in range(len(grid)):

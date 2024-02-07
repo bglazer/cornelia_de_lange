@@ -94,47 +94,47 @@ t_span = torch.linspace(0, len_trajectory, n_steps)
 
 #%%
 # Load the model
-model = GroupL1FlowModel(input_dim=num_nodes, 
-                         hidden_dim=hidden_dim, 
-                         num_layers=num_layers,
-                         predict_var=True)
-model.load_state_dict(target_state_dict)
-model = model.to(device)
-Xgpu = X.to(device)
+# model = GroupL1FlowModel(input_dim=num_nodes, 
+#                          hidden_dim=hidden_dim, 
+#                          num_layers=num_layers,
+#                          predict_var=True)
+# model.load_state_dict(target_state_dict)
+# model = model.to(device)
+# Xgpu = X.to(device)
 
-#%%
-# Load the baseline trajectories
-baseline_trajectories = pickle.load(open(f'{tgt_outdir}/baseline_trajectories_{target_genotype}.pickle', 'rb'))
-baseline_trajectories_np = baseline_trajectories
-baseline_idxs = pickle.load(open(f'{tgt_outdir}/baseline_nearest_cell_idxs_{target_genotype}.pickle', 'rb'))
-baseline_velo,_ = plotting.compute_velo(model=model, X=X, numpy=True)
-#%%
-plotting.time_distribution(baseline_trajectories_np[:,:], pca,
-                           label=f'Baseline {target_genotype} - no transfer',
-                           baseline=Xnp)
-# plt.show()
-plt.savefig(f'{pltdir}/baseline_{target_genotype}_time_distribution.png', bbox_inches='tight')
-plt.close()
-#%%
-plotting.cell_type_distribution(baseline_trajectories_np[:,:], 
-                                baseline_idxs[:,:],
-                                tgt_data,
-                                cell_types,
-                                pca,
-                                label=f'Baseline {target_genotype} - no transfer',
-                                baseline=Xnp)
-# plt.show()
-plt.savefig(f'{pltdir}/baseline_{target_genotype}_cell_type_distribution.png', bbox_inches='tight')
-plt.close()
-#%%
-plotting.cell_type_distribution(np.expand_dims(Xnp, axis=1), 
-                                np.expand_dims(np.arange(Xnp.shape[0]), axis=1),
-                                tgt_data,
-                                cell_types,
-                                pca,
-                                label=f'Cell Type Distribution - Data',
-                                baseline=None,
-                                s=20)
+# #%%
+# # Load the baseline trajectories
+# baseline_trajectories = pickle.load(open(f'{tgt_outdir}/baseline_trajectories_{target_genotype}.pickle', 'rb'))
+# baseline_trajectories_np = baseline_trajectories
+# baseline_idxs = pickle.load(open(f'{tgt_outdir}/baseline_nearest_cell_idxs_{target_genotype}.pickle', 'rb'))
+# baseline_velo,_ = plotting.compute_velo(model=model, X=X, numpy=True)
+# #%%
+# plotting.time_distribution(baseline_trajectories_np[:,:], pca,
+#                            label=f'Baseline {target_genotype} - no transfer',
+#                            baseline=Xnp)
+# # plt.show()
+# plt.savefig(f'{pltdir}/baseline_{target_genotype}_time_distribution.png', bbox_inches='tight')
+# plt.close()
+# #%%
+# plotting.cell_type_distribution(baseline_trajectories_np[:,:], 
+#                                 baseline_idxs[:,:],
+#                                 tgt_data,
+#                                 cell_types,
+#                                 pca,
+#                                 label=f'Baseline {target_genotype} - no transfer',
+#                                 baseline=Xnp)
+# # plt.show()
+# plt.savefig(f'{pltdir}/baseline_{target_genotype}_cell_type_distribution.png', bbox_inches='tight')
+# plt.close()
+# #%%
+# plotting.cell_type_distribution(np.expand_dims(Xnp, axis=1), 
+#                                 np.expand_dims(np.arange(Xnp.shape[0]), axis=1),
+#                                 tgt_data,
+#                                 cell_types,
+#                                 pca,
+#                                 label=f'Cell Type Distribution - Data',
+#                                 baseline=None,
+#                                 s=20)
 #%%
 node_to_idx = pickle.load(open(f'../../data/protein_id_to_idx.pickle', 'rb'))
 all_genes = set(node_to_idx.keys())
@@ -142,93 +142,128 @@ all_genes = set(node_to_idx.keys())
 num_gpus = 4
 
 #%%
-def simulate_transfer(transfer_gene, i, repeats):
-    print(f'Transfer Gene {protein_id_name[transfer_gene]:10s}: ({i+1}/{len(all_genes)})', flush=True)
+# Load the baseline trajectories
+baseline_trajectories = pickle.load(open(f'{src_outdir}/baseline_trajectories_{source_genotype}.pickle', 'rb'))
+baseline_trajectories_np = baseline_trajectories
+baseline_idxs = pickle.load(open(f'{src_outdir}/baseline_nearest_cell_idxs_{source_genotype}.pickle', 'rb'))
+# baseline_velo,_ = plotting.compute_velo(model=model, X=src_X, numpy=True)
+# baseline_X = baseline_trajectories_np.reshape(-1, num_nodes)
+baseline_cell_proportions, baseline_cell_errors = plotting.calculate_cell_type_proportion(baseline_idxs, src_data, cell_types, n_repeats, error=True)
+
+
+#%%
+num_gpus = 4
+def simulate_transfer(transfer_genes, idx):
+    # For testing purposes return a random cell type proportion of the same shape as the baseline
+    # return transfer_genes, np.random.rand(*baseline_cell_proportions.shape), np.random.rand(*baseline_cell_proportions.shape)
     
-    gpu = i % num_gpus
+    gpu = idx % num_gpus
     device = f'cuda:{gpu}'
 
     # Re-initialize the model and simulator at each iteration
     tgt_model = GroupL1FlowModel(input_dim=num_nodes, 
-                             hidden_dim=hidden_dim, 
-                             num_layers=num_layers,
-                             predict_var=True)
+                                 hidden_dim=hidden_dim, 
+                                 num_layers=num_layers,
+                                 predict_var=True)
     tgt_model.load_state_dict(target_state_dict)
     tgt_model = tgt_model.to(device)
     src_model = GroupL1FlowModel(input_dim=num_nodes, 
-                             hidden_dim=hidden_dim, 
-                             num_layers=num_layers,
-                             predict_var=True)
+                                 hidden_dim=hidden_dim, 
+                                 num_layers=num_layers,
+                                 predict_var=True)
     src_model.load_state_dict(source_state_dict)
     src_model = src_model.to(device)
-    model_idx = node_to_idx[transfer_gene]
-    src_gene_model = src_model.models[model_idx]
-    tgt_gene_model = tgt_model.models[model_idx]
-    tgt_gene_model.load_state_dict(src_gene_model.state_dict())
-    Xgpu = X.to(device)
-    simulator = Simulator(tgt_model, Xgpu, device=device, boundary=False, show_progress=False)
-
-    repeats = repeats.to(device)
-    perturb_trajectories, perturb_nearest_idxs = simulator.simulate(repeats, t_span)
-    transfer_gene_name = protein_id_name[transfer_gene]
+    for transfer_gene in transfer_genes:
+        model_idx = node_to_idx[transfer_gene]
+        src_gene_model = src_model.models[model_idx]
+        tgt_gene_model = tgt_model.models[model_idx]
+        tgt_gene_model.load_state_dict(src_gene_model.state_dict())
+    # TODO revert to tgt_X
+    simulator = Simulator(tgt_model, src_X.to(device), device=device, boundary=False, show_progress=False)
+    repeats_gpu = repeats.to(device)
+    perturb_trajectories, perturb_nearest_idxs = simulator.simulate(repeats_gpu, t_span)
     perturb_trajectories_np = util.tonp(perturb_trajectories)
     perturb_idxs_np = util.tonp(perturb_nearest_idxs)
+    # Delete full trajectories so that we can free the GPU memory
+    del perturb_trajectories
+    del perturb_nearest_idxs
+    # Tell the garbage collector to free the GPU memory
+    torch.cuda.empty_cache()
     # Aggregate the individual cell trajectories by mean
-    mean_trajectories = perturb_trajectories.mean(dim=1)
+    mean_trajectories = perturb_trajectories_np.mean(axis=1)
     # Save the mean trajectories
-    with open(f'{datadir}/{transfer_gene_name}_{transfer}_transfer_mean_trajectories.pickle', 'wb') as f:
-        pickle.dump(mean_trajectories, f)
+    with open(f'{datadir}/combination_{idx}_{transfer}_transfer_mean_trajectories.pickle', 'wb') as f:
+        mean_trajectory_dict = {'transfer_genes': transfer_genes,
+                                'mean_trajectories': mean_trajectories,}
+        pickle.dump(mean_trajectory_dict, f)
 
-    plotting.time_distribution(perturb_trajectories_np[:,:], pca,
-                               label=f'{transfer_gene_name} Transfer',
-                               baseline=Xnp)
-    plt.savefig(f'{pltdir}/{transfer_gene_name}_{transfer}_transfer_time_distribution.png',
-                bbox_inches='tight')
-    plt.close()
-    plotting.cell_type_distribution(perturb_trajectories_np[:,:], 
-                                    perturb_idxs_np[:,:],
-                                    tgt_data,
-                                    cell_types,
-                                    pca,
-                                    label=f'{transfer_gene_name} Transfer',
-                                    baseline=Xnp)
-    plt.savefig(f'{pltdir}/{transfer_gene_name}_{transfer}_transfer_cell_type_distribution.png',
-                bbox_inches='tight')
-    plt.close()
-    velo,_ = plotting.compute_velo(model=simulator.model, X=Xgpu, perturbation=None, numpy=True)
-    plotting.arrow_grid(velos=[velo, baseline_velo], 
-                        data=[tgt_data, tgt_data], 
-                        pca=pca, 
-                        labels=[f'{transfer_gene_name} Transfer', f'{target_genotype.capitalize()} baseline'])
-    plt.savefig(f'{pltdir}/{transfer_gene_name}_{transfer}_transfer_arrow_grid.png')
-    plt.close()
-    plotting.sample_trajectories(perturb_trajectories_np, Xnp, pca, f'{transfer_gene_name} Transfer')
-    plt.savefig(f'{pltdir}/{transfer_gene_name}_{transfer}_transfer_trajectories.png')
-    plt.close()
-    trajectories = plotting.compare_cell_type_trajectories([perturb_idxs_np, baseline_idxs],
-                                                           [tgt_data, tgt_data], 
-                                                           cell_types,
-                                                           [transfer_gene_name, 'baseline'])
-    # Save the trajectories
-    with open(f'{datadir}/{transfer_gene_name}_{transfer}_transfer_cell_type_trajectories.pickle', 'wb') as f:
-        pickle.dump(trajectories, f)
-    plt.savefig(f'{pltdir}/{transfer_gene_name}_{transfer}_transfer_cell_type_trajectories.png')
-    plt.close()
-    # Plot side by side bar charts of the cell type proportions
-    perturb_cell_proportions, perturb_cell_errors = plotting.calculate_cell_type_proportion(perturb_idxs_np, tgt_data, cell_types, n_repeats, error=True)
-    baseline_cell_proportions, baseline_cell_errors = plotting.calculate_cell_type_proportion(baseline_idxs, tgt_data, cell_types, n_repeats, error=True)
-    # Save the cell type proportions
-    plotting.cell_type_proportions(proportions=(perturb_cell_proportions, 
-                                                baseline_cell_proportions), 
-                                   proportion_errors=(perturb_cell_errors,
-                                           baseline_cell_errors),
-                                   cell_types=list(cell_types), 
-                                   labels=[f'{transfer_gene_name} Transfer', f'{target_genotype.capitalize()} baseline'])
-    plt.savefig(f'{pltdir}/{transfer_gene_name}_{transfer}_transfer_cell_type_proportions.png',
-                bbox_inches='tight');
-    plt.close();
-    with open(f'{datadir}/{transfer_gene_name}_{transfer}_transfer_cell_type_proportions.pickle', 'wb') as f:
-        pickle.dump((perturb_cell_proportions, perturb_cell_errors, baseline_cell_proportions), f)
+    # TODO revert to tgt_data
+    perturb_cell_proportions, perturb_cell_errors = plotting.calculate_cell_type_proportion(perturb_idxs_np, src_data, cell_types, n_repeats, error=True)
+    
+    proportion_dict = {'transfer_genes': transfer_genes,
+                       'perturb_proportions':perturb_cell_proportions, 
+                       'perturb_errors': perturb_cell_errors}
+    pickle.dump(proportion_dict,
+                open(f'{datadir}/combination_{idx}_{transfer}_transfer_cell_type_proportions.pickle', 'wb'))
+    d = np.abs(perturb_cell_proportions - baseline_cell_proportions).sum()
+    print(f'{d}, {" ".join([protein_id_name[g] for g in transfer_genes])}', flush=True)
+    return transfer_genes, perturb_cell_proportions, perturb_cell_errors
+
+#%%
+
+    # with open(f'{datadir}/{transfer_gene_name}_{transfer}_transfer_mean_trajectories.pickle', 'wb') as f:
+    #     pickle.dump(mean_trajectories, f)
+
+    # plotting.time_distribution(perturb_trajectories_np[:,:], pca,
+    #                            label=f'{transfer_gene_name} Transfer',
+    #                            baseline=Xnp)
+    # plt.savefig(f'{pltdir}/{transfer_gene_name}_{transfer}_transfer_time_distribution.png',
+    #             bbox_inches='tight')
+    # plt.close()
+    # plotting.cell_type_distribution(perturb_trajectories_np[:,:], 
+    #                                 perturb_idxs_np[:,:],
+    #                                 tgt_data,
+    #                                 cell_types,
+    #                                 pca,
+    #                                 label=f'{transfer_gene_name} Transfer',
+    #                                 baseline=Xnp)
+    # plt.savefig(f'{pltdir}/{transfer_gene_name}_{transfer}_transfer_cell_type_distribution.png',
+    #             bbox_inches='tight')
+    # plt.close()
+    # velo,_ = plotting.compute_velo(model=simulator.model, X=Xgpu, perturbation=None, numpy=True)
+    # plotting.arrow_grid(velos=[velo, baseline_velo], 
+    #                     data=[tgt_data, tgt_data], 
+    #                     pca=pca, 
+    #                     labels=[f'{transfer_gene_name} Transfer', f'{target_genotype.capitalize()} baseline'])
+    # plt.savefig(f'{pltdir}/{transfer_gene_name}_{transfer}_transfer_arrow_grid.png')
+    # plt.close()
+    # plotting.sample_trajectories(perturb_trajectories_np, Xnp, pca, f'{transfer_gene_name} Transfer')
+    # plt.savefig(f'{pltdir}/{transfer_gene_name}_{transfer}_transfer_trajectories.png')
+    # plt.close()
+    # trajectories = plotting.compare_cell_type_trajectories([perturb_idxs_np, baseline_idxs],
+    #                                                        [tgt_data, tgt_data], 
+    #                                                        cell_types,
+    #                                                        [transfer_gene_name, 'baseline'])
+    # # Save the trajectories
+    # with open(f'{datadir}/{transfer_gene_name}_{transfer}_transfer_cell_type_trajectories.pickle', 'wb') as f:
+    #     pickle.dump(trajectories, f)
+    # plt.savefig(f'{pltdir}/{transfer_gene_name}_{transfer}_transfer_cell_type_trajectories.png')
+    # plt.close()
+    # # Plot side by side bar charts of the cell type proportions
+    # perturb_cell_proportions, perturb_cell_errors = plotting.calculate_cell_type_proportion(perturb_idxs_np, tgt_data, cell_types, n_repeats, error=True)
+    # baseline_cell_proportions, baseline_cell_errors = plotting.calculate_cell_type_proportion(baseline_idxs, tgt_data, cell_types, n_repeats, error=True)
+    # # Save the cell type proportions
+    # plotting.cell_type_proportions(proportions=(perturb_cell_proportions, 
+    #                                             baseline_cell_proportions), 
+    #                                proportion_errors=(perturb_cell_errors,
+    #                                                   baseline_cell_errors),
+    #                                cell_types=list(cell_types), 
+    #                                labels=[f'{transfer_gene_name} Transfer', f'{target_genotype.capitalize()} baseline'])
+    # plt.savefig(f'{pltdir}/{transfer_gene_name}_{transfer}_transfer_cell_type_proportions.png',
+    #             bbox_inches='tight');
+    # plt.close();
+    # with open(f'{datadir}/{transfer_gene_name}_{transfer}_transfer_cell_type_proportions.pickle', 'wb') as f:
+    #     pickle.dump((perturb_cell_proportions, perturb_cell_errors, baseline_cell_proportions), f)
 
 #%%
 # simulate_transfer(transfer_gene='ENSMUSP00000134654', i=0, repeats=repeats)

@@ -158,7 +158,7 @@ plotting.time_distribution(wt_trajectories_np, pca, 'Wildtype', baseline=wt_Xnp)
 #%%
 plotting.time_distribution(mut_trajectories_np, pca, 'Mutant', baseline=mut_Xnp)
 #%%
-plotting.cell_type_distribution(wt_trajectories_np, wt_idxs_np, wt_data, cell_type_to_idx, pca, 'Wildtype', baseline=wt_Xnp)
+plotting.cell_type_distribution(wt_trajectories_np, wt_idxs_np, wt_data, cell_type_to_idx, pca, 'Wildtype', baseline=None)
 #%%
 wt_gene_trajectories = wt_trajectories_np.mean(axis=1)
 mut_gene_trajectories = mut_trajectories_np.mean(axis=1)
@@ -219,4 +219,25 @@ print('Mut mean:', mut_pou5f1_mean, 'Mut std:', mut_pou5f1_std)
 plt.plot(wt_gene_trajectories[:,pou5f1_idx], label='Wildtype')
 plt.plot(mut_gene_trajectories[:,pou5f1_idx], label='Mutant')
 plt.legend()
+# %%
+# Compare VIM, MESP1, ID2/3, which we hypothesize are driving 
+# cardiogenic mesoderm progenitor (CMP) migration and differentiation
+cmp_genes = ['VIM', 'MESP1', 'ID2', 'ID3', 'SNAI1', 'TWIST1']
+
+wt_cmp_mean = wt_gene_trajectories[:,[node_to_idx[protein_name_id[cmp]] for cmp in cmp_genes]]
+mut_cmp_mean = mut_gene_trajectories[:,[node_to_idx[protein_name_id[cmp]] for cmp in cmp_genes]]
+
+
+# In side by side plots, show the mean expression of each of the cmp genes across time
+fig, axs = plt.subplots(len(cmp_genes),1, figsize=(5,15))
+for i, cmp in enumerate(cmp_genes):
+    axs[i].plot(wt_cmp_mean[:,i], label='Wildtype')
+    axs[i].plot(mut_cmp_mean[:,i], label='Mutant')
+    axs[i].set_title(cmp)
+    # axs[1,i].set_title(cmp)
+    # axs[0,i].legend()
+    # axs[1,i].plot(wt_cmp_mean[:,i] - mut_cmp_mean[:,i])
+    # axs[1,i].set_title('Difference')
+plt.tight_layout()
+
 # %%

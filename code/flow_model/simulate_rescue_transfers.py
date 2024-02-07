@@ -29,8 +29,8 @@ torch.manual_seed(0)
 
 # %%
 # Load the models
-source_genotype = 'mutant'
-target_genotype = 'wildtype'
+source_genotype = 'wildtype'
+target_genotype = 'mutant'
 
 src_tmstp = '20230607_165324' if source_genotype == 'wildtype' else '20230608_093734'
 tgt_tmstp = '20230607_165324' if target_genotype == 'wildtype' else '20230608_093734'
@@ -249,9 +249,9 @@ import re
 import os
 
 start_idx = 0
-for path in glob.glob(f'{datadir}/top_transfer_combination_*'):
+for path in glob.glob(f'{datadir}/top_{transfer}_combination_*'):
     filename = path.split('/')[-1]
-    idx = int(re.findall('top_transfer_combination_(.*).pickle', filename)[0])
+    idx = int(re.findall(f'top_{transfer}_combination_(.*).pickle', filename)[0])
     start_idx = max(start_idx, idx)
 # Increment the start index by 1 so that we don't overwrite the last file
 start_idx = start_idx + 1
@@ -262,7 +262,9 @@ start_idx = start_idx + 1
 n_repeats = 10
 for repeat in range(start_idx, start_idx+n_repeats):
     sorted_distances = sorted([(d.sum(),gene) for d,gene in individual_transfer_baseline_distances])
-    best_gene = sorted_distances[0][1]
+    # TODO uncomment below
+    # best_gene = sorted_distances[0][1]
+    best_gene = 'ENSMUSP00000028062'
     best_combo = (best_gene,)
     remaining_genes = [gene for _,gene in sorted_distances if gene not in best_combo]
     best_distance = float('inf')
@@ -274,7 +276,7 @@ for repeat in range(start_idx, start_idx+n_repeats):
             combo = best_combo + (gene,)
             all_combos.append((idx,combo))
             idx += 1 
-        label = 'greedy'
+        label = 'VIM_first'
         parallel = Parallel(n_jobs=12)
         results = parallel(delayed(simulate_transfer)(transfer_genes, i, label) for i, transfer_genes in all_combos)
         # results = [simulate_transfer(transfer_genes, i) for i,transfer_genes in all_combos]
@@ -294,5 +296,5 @@ for repeat in range(start_idx, start_idx+n_repeats):
         print(f'Cell types outside 2 std dev: {",".join([idx_to_cell_type[miss_idx] for miss_idx in np.where(best_misses)[0]])}')
         print('-'*80)
         remaining_genes = [gene for gene in remaining_genes if gene not in best_combo]
-        pickle.dump(best_combo, open(f'{datadir}/top_transfer_combination_{repeat}.pickle', 'wb'))
+        pickle.dump(best_combo, open(f'{datadir}/top_{label}_{transfer}_combination_{repeat}.pickle', 'wb'))
 # %%

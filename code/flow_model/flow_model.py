@@ -43,7 +43,37 @@ class GroupL1MLP(MLP):
         for layer in self.layers[1:]:
             x = layer(x)
         return x
-    
+
+class LinearFlowModel(torch.nn.Module):
+    def __init__(self, input_dim, predict_var=False):
+        super(LinearFlowModel, self).__init__()
+        self.models = []
+        self.predict_var = predict_var
+        outdim = 2 if predict_var else 1
+        # Create a separate Linear model for each node in the graph
+        for i in range(input_dim):
+            node = Linear(input_dim, outdim, bias=True)
+            self.models.append(node)
+        self.models = torch.nn.ModuleList(self.models)
+        
+
+    def forward(self, state):
+        delta = torch.zeros_like(state)
+        if self.predict_var:
+            var = torch.zeros_like(state)
+        # For each node, run the corresponding MLP and insert the output into the delta tensor
+        for i,model in enumerate(self.models):
+            # state is a tensor of shape (num_nodes, num_states)
+            y = model(state)
+            if self.predict_var:
+                delta[:,i] = y[:,0]
+                var[:,i] = y[:,1]
+            # Add the weights of the first layer to a list
+        # Get the weights of the first layer
+        if self.predict_var:
+            return delta, var
+        return delta
+
 # Variational Autoencoder (VAE)
 class VAEFlowModel(torch.nn.Module):
     def __init__(self, input_dim, hidden_dim, latent_dim, num_layers):
@@ -62,17 +92,22 @@ class VAEFlowModel(torch.nn.Module):
         decoded = self.decoder(z)
         return decoded
     
-
-# FlowModel is a neural ODE that takes in a state and outputs a delta
 class ConnectedFlowModel(torch.nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_dim, num_layers):
+    def __init__(self, input_dim, output_dim, hidden_dim, num_layers, predict_var=False):
         super(ConnectedFlowModel, self).__init__()
-        self.model = MLP(input_dim, output_dim, hidden_dim, num_layers)
-        # self.neural_ode = NeuralODE(self.model, sensitivity='adjoint')  
+        self.output_dim = output_dim
+        self.predict_var = predict_var
+        if predict_var:
+            self.model = MLP(input_dim, output_dim*2, hidden_dim, num_layers)
+        else:
+            self.model = MLP(input_dim, output_dim, hidden_dim, num_layers)
 
     def forward(self, state):
         # state is a tensor of shape (num_nodes, num_states)
-        delta = self.model(state)
+        delta = self.model(state)[:, :self.output_dim]
+        if self.predict_var:
+            var = self.model(state)[:, self.output_dim:]
+            return delta, var
         return delta
     
 class L1FlowModel(torch.nn.Module):

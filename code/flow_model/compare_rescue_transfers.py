@@ -1,6 +1,6 @@
 #%%
 import pickle
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt 
 import numpy as np
 import sys
 sys.path.append('..')
@@ -8,7 +8,6 @@ import util
 from tabulate import tabulate
 import scanpy as sc
 import networkx as nx
-from itertools import combinations
 import plotting
 import random
 import matplotlib
@@ -18,8 +17,6 @@ from collections import Counter
 # Load the data
 source_genotype = 'wildtype'
 target_genotype = 'mutant'
-label = 'VIM_first_'
-# label = ''
 
 src_tmstp = '20230607_165324' if source_genotype == 'wildtype' else '20230608_093734'
 tgt_tmstp = '20230607_165324' if target_genotype == 'wildtype' else '20230608_093734'
@@ -59,7 +56,7 @@ individual_errors = {}
 # Load all the individual transfer simulation results (cell type proportions)
 # Plus one for the empty (null) transfer
 for i in range(0, len(all_genes)):
-    result = pickle.load(open(f'{datadir}/individual_combination_{i}_mutant_to_wildtype_transfer_cell_type_proportions.pickle', 'rb'))
+    result = pickle.load(open(f'{datadir}/individual_combination_{i}_{transfer}_transfer_cell_type_proportions.pickle', 'rb'))
     gene = tuple(result['transfer_genes'])[0]
     proportions = result['perturb_proportions']
     error = result['perturb_errors']
@@ -72,7 +69,7 @@ individual_transfer_rank = {gene: i for i, (gene, distances) in enumerate(sorted
 
 #%%
 # Load the baseline transfer (null, no transfer) simulation results
-baseline_result = pickle.load(open(f'{datadir}/baseline_combination_0_mutant_to_wildtype_transfer_cell_type_proportions.pickle', 'rb'))
+baseline_result = pickle.load(open(f'{datadir}/baseline_combination_0_{transfer}_transfer_cell_type_proportions.pickle', 'rb'))
 baseline_proportions = baseline_result['perturb_proportions']
 baseline_error = baseline_result['perturb_errors']
 baseline_distance = np.abs(baseline_proportions - src_baseline_cell_proportions).sum()
@@ -106,6 +103,8 @@ for i, (transfer_gene, distances) in enumerate(sorted_distances):
                 #  f'{var_expression_rank[transfer_idx]:5d}'))
 #%%
 best_gene_combinations = []
+# TODO use the label when we want to select only the VIM first transfers
+label = ''
 for file in glob.glob(f'{datadir}/top_{label}{transfer}_combination*.pickle'):
     combo = pickle.load(open(file, 'rb'))
     best_gene_combinations.append(combo)
@@ -113,15 +112,7 @@ for file in glob.glob(f'{datadir}/top_{label}{transfer}_combination*.pickle'):
 combo_gene_counts = Counter()
 for combo in best_gene_combinations:
     combo_gene_counts.update(combo)
-#%%
-# Plot a bar chart of the size of the transfer gene combinations
-sizes = [len(combo) for combo in best_gene_combinations]
-counts, bins = np.histogram(sizes, bins=np.arange(min(sizes), max(sizes)+1))
-plt.bar(bins[:-1], counts, width=1)
-plt.title('Transfer set sizes')
-plt.xlabel('Set size')
-plt.ylabel('Count')
-#%%
+
 # Simulate selecting random combinations of genes of the same size as the best combinations
 n_repeats = 10_000
 random_occurences = {gene: np.zeros(n_repeats) for gene in all_genes}
@@ -133,21 +124,20 @@ for i in range(n_repeats):
     for gene, count in random_combo_gene_counts.items():
         random_occurences[gene][i] = count
 
-gene_probability = {gene: (random_occurences[gene] > combo_gene_counts[gene]).sum() / n_repeats
-                    for gene, _ in combo_gene_counts.most_common()} 
-for gene, p in gene_probability.items():
-    count = combo_gene_counts[gene]
+for gene, count in combo_gene_counts.most_common():
+    p = (random_occurences[gene] > count).sum()/n_repeats
     print(f'{count:2d}/{len(best_gene_combinations):2d} {p:.4f} {protein_id_name[gene]}')
+
 
 all_core_genes = list(combo_gene_counts.keys())
 
 #%%
-n_repeats = 1_000
 p_components = []
 for combo in best_gene_combinations:
     # Compute the probability of finding N randomly selected nodes in a strongly connected component
     combo_components = nx.strongly_connected_components(src_graph.subgraph(combo))
     combo_max_component = max(combo_components, key=lambda x: len(x))
+    n_repeats = 10000
     big_component_sizes = np.zeros(n_repeats)
 
     for i in range(n_repeats):
@@ -164,117 +154,85 @@ for combo in best_gene_combinations:
 p_components = np.array(p_components)
 print(f'p-values less than .05: {(p_components < .05).sum()} out of {len(p_components)}')
 #%%
-all_combo_genes = set()
+combined_components = nx.DiGraph()
+combo_components = []
 for combo in best_gene_combinations:
-    all_combo_genes.update(combo)
+    components = nx.strongly_connected_components(src_graph.subgraph(combo))
+    largest_component_genes = max(components, key=lambda x: len(x))
+    combo_components.append(largest_component_genes)
+    largest_component = src_graph.subgraph(largest_component_genes)
+    assert(len(largest_component_genes) == len(largest_component))
+    combined_components.add_edges_from(largest_component.edges)
+    combined_components.add_nodes_from(largest_component.nodes)
 
-combo_graph = src_graph.subgraph(all_combo_genes)
+assert(nx.is_strongly_connected(combined_components))
 
-combo_components = list(nx.strongly_connected_components(combo_graph))
-combo_components = sorted(combo_components, key=lambda x: len(x), reverse=True)
-combined_component_genes = max(combo_components, key=lambda x: len(x))
-combined_component = src_graph.subgraph(combined_component_genes)
-combined_component = nx.DiGraph(combined_component)
-assert(nx.is_strongly_connected(combined_component))
-
-for i,component in enumerate(combo_components):
-    print('Component', i)
-    print(f'Number of nodes in best combination subgraph connected component: {len(component)}')
-#%%
-combined_component_density = combined_component.number_of_nodes()/combined_component.number_of_edges()
-print(f'Combined component density: {combined_component_density}')
-
-all_transfer_genes = set()
-for combo in best_gene_combinations:
-    all_transfer_genes.update(combo)
-
-combined_component_proportion = combined_component.number_of_nodes()/len(all_transfer_genes)
-print(f'Combined component proportion: {combined_component_proportion}')
-print(f'Combined component size: {combined_component.number_of_nodes()}')
-print(f'Number of transfer genes: {len(all_transfer_genes)}')
-#%%
-# Calculate probability of finding a larger core component by chance
-n_repeats = 10_000
-random_component_sizes = np.zeros(n_repeats)
-for i in range(n_repeats):
-    random_genes = random.sample(list(all_genes), len(all_transfer_genes))
-    random_component = src_graph.subgraph(random_genes)
-    largest_random_component = max(nx.strongly_connected_components(random_component), key=lambda x: len(x))
-    random_component_sizes[i] = len(largest_random_component)
-p_larger_component = (random_component_sizes > len(combined_component)).sum() / n_repeats
-print(f'Probability of finding a larger component by chance: {p_larger_component}', flush=True)
+print(f'Number of nodes in combined components: {len(combined_components)}')
+print(f'Number of edges in combined components: {len(combined_components.edges)}')
 #%%
 # Save the combined components
-pickle.dump(combined_component, open(f'{datadir}/{label}{transfer}_core_circuit.pickle', 'wb'))
+pickle.dump(combined_components, open(f'{datadir}/core_circuit.pickle', 'wb'))
 #%%
-core_subgraph_genes = list(combined_component.nodes)
-
+core_subgraph_genes = list(combined_components.nodes)
+#%%
 # Frequency of core genes in the best combinations
 core_gene_counts = Counter()
-for gene in combined_component.nodes:
+for gene in combined_components.nodes:
     for combo in best_gene_combinations:
         if gene in combo:
             core_gene_counts[gene] += 1
 for i,(gene, count) in enumerate(core_gene_counts.most_common()):
     print(f'{i} {count}/{len(best_gene_combinations)} {protein_id_name[gene]}')
 
-#%%
-def draw_graph(graph, title):
-    # Draw the combined components
-    layout = nx.kamada_kawai_layout(graph)
-
-    # Color nodes by their connectivity
-    colormap = matplotlib.cm.viridis
-    pagerank = nx.pagerank(graph)
-    centrality = np.array([pagerank[node] for node in graph.nodes])
-    centrality_scaled = (centrality - centrality.min()) / (centrality.max() - centrality.min())
-    node_colors = [colormap(centrality_scaled[i]) for i in range(len(graph.nodes))]
-    node_scale = np.array([core_gene_counts[gene]/len(core_gene_counts)
-                        for gene in graph.nodes])
-    node_sizes = (node_scale * 1500)
-    # Increase the dpi of the figure so the text is not blurry
-    fig = plt.figure(dpi=300)
-    no_self_loops = graph.copy()
-    no_self_loops.remove_edges_from(nx.selfloop_edges(no_self_loops))
-    nx.draw(no_self_loops, pos=layout,
-            node_size=centrality_scaled*500+100,
-            edge_color='grey',
-            # Change the node border color to blue
-            node_color=node_colors,
-            # alpha=node_scale+0.5,
-            with_labels=False,
-            )
-
-    plt_height = plt.ylim()[1] - plt.ylim()[0]
-    # Get figure size in inches and dpi
-    fig_height_in = fig.get_figheight()
-    dpi = fig.get_dpi()
-    # Convert node size from points**2 to the fig data scale
-    node_size_in = np.sqrt(node_sizes) / dpi
-    # Convert node size from fig data scale to axes data scale
-    node_size_ax = node_size_in*2 * plt_height / fig_height_in
-
-    for i in range(len(graph.nodes)):
-        gene = list(graph.nodes)[i]
-        plt.text(layout[gene][0], layout[gene][1]-node_size_ax[i], protein_id_name[gene], 
-                 horizontalalignment='center', verticalalignment='top',
-                 fontsize=8, color='black',
-                 bbox=dict(facecolor='white', edgecolor='grey', boxstyle='round,pad=0.1'))
-    plt.title(title)
-    plt.colorbar(matplotlib.cm.ScalarMappable(norm=matplotlib.colors.Normalize(vmin=centrality.min(), vmax=centrality.max()), 
-                                            cmap=colormap),
-                                            shrink=.5, label='PageRank Centrality');
-#%%
-transfer_name = f'{source_genotype.capitalize()} to {target_genotype.capitalize()}'
-draw_graph(combined_component, title=f'{transfer_name} Transfer Gene Core Circuit')
 
 #%%
-# Only genes that pass the threshold
-threshold = 0.01
-significant_genes = [gene for gene in gene_probability if gene_probability[gene] < threshold]
-significant_graph = src_graph.subgraph(significant_genes)
-draw_graph(significant_graph, title=f'Statistically Significant {transfer_name} Transfer Genes')
-print('Is significant graph strongly connected: ', nx.is_strongly_connected(significant_graph))
+# Draw the combined components
+layout = nx.kamada_kawai_layout(combined_components)
+
+node_labels = {node:protein_id_name[node] for node in combined_components.nodes}
+# Color nodes by their connectivity
+colormap = matplotlib.cm.viridis
+pagerank = nx.pagerank(combined_components)
+centrality = np.array([pagerank[node] for node in combined_components.nodes])
+centrality_scaled = (centrality - centrality.min()) / (centrality.max() - centrality.min())
+node_colors = [colormap(centrality_scaled[i]) for i in range(len(combined_components.nodes))]
+node_scale = np.array([core_gene_counts[gene]/len(core_gene_counts)
+                       for gene in combined_components.nodes])
+node_sizes = (node_scale * 1500)
+# Increase the dpi of the figure so the text is not blurry
+fig = plt.figure(dpi=300)
+no_self_loops = combined_components.copy()
+no_self_loops.remove_edges_from(nx.selfloop_edges(no_self_loops))
+nx.draw(no_self_loops, pos=layout,
+        node_size=centrality_scaled*500+100,
+        edge_color='grey',
+        # Change the node border color to blue
+        node_color=node_colors,
+        # alpha=node_scale+0.5,
+        with_labels=False,
+        )
+
+plt_height = plt.ylim()[1] - plt.ylim()[0]
+plt_width = plt.xlim()[1] - plt.xlim()[0]
+# Get figure size in inches and dpi
+fig_width_in = fig.get_figwidth()
+fig_height_in = fig.get_figheight()
+dpi = fig.get_dpi()
+# Convert node size from points**2 to the fig data scale
+node_size_in = np.sqrt(node_sizes) / dpi
+# Convert node size from fig data scale to axes data scale
+node_size_ax = node_size_in*2 * plt_height / fig_height_in
+
+for i in range(len(combined_components.nodes)):
+    gene = list(combined_components.nodes)[i]
+    plt.text(layout[gene][0], layout[gene][1]-node_size_ax[i], protein_id_name[gene], 
+             horizontalalignment='center', verticalalignment='top',
+             fontsize=8, color='black',
+             bbox=dict(facecolor='white', edgecolor='grey', boxstyle='round,pad=0.1'))
+plt.title('Core Subgraph of Optimal Mutant Transfer Genes')
+plt.colorbar(matplotlib.cm.ScalarMappable(norm=matplotlib.colors.Normalize(vmin=centrality.min(), vmax=centrality.max()), 
+                                          cmap=colormap),
+                                          shrink=.5, label='PageRank Centrality')
 #%%
 # Which clusters in the regulatory graph are the transfer genes in?
 # graph = pickle.load(open(f'../../data/filtered_graph.pickle', 'rb'))
@@ -327,13 +285,12 @@ print(f'{len(regulated_genes)} out of {len(all_genes)} genes are regulated by th
 #%%
 # Print the rank of the genes in the best combination, with their rank
 # in the individual transfer simulations. Also print their mean and variance ranks
-headers = ['Gene', 'Transfer Count', 'Cell Proportion Dist', 'Mut-WT Single Transfer Rank', 'WT Mean Rank',  'WT Var Rank', 'Number of Targets Rank']
+headers = ['Gene', 'Cell Proportion Dist', 'Mut-WT Single Transfer Rank', 'WT Mean Rank',  'WT Var Rank', 'Number of Targets Rank']
 rows = []
 num_targets = {gene: len(src_graph.out_edges(gene)) for gene in all_genes}
 sorted_by_targets = sorted(all_genes, key=lambda x: num_targets[x], reverse=True)
 num_targets_rank = {gene: i for i, gene in enumerate(sorted_by_targets)}
-sorted_subgraph_genes = sorted(core_subgraph_genes, key=lambda gene: core_gene_counts[gene], reverse=True)
-for i, transfer_gene in enumerate(sorted_subgraph_genes):
+for i, transfer_gene in enumerate(core_subgraph_genes):
     # Get the outgoing edges from the transfer gene from the networkx graph
     targets_rank = num_targets_rank[transfer_gene]
     # Get the distance of the transfer gene from the baseline
@@ -342,7 +299,6 @@ for i, transfer_gene in enumerate(sorted_subgraph_genes):
     transfer_names = protein_id_name[transfer_gene]
 
     rows.append((f'{transfer_names}',
-                 f'{core_gene_counts[transfer_gene]:2d}/{len(best_gene_combinations):2d}',
                  f'{distances.sum():.3f}',
                  f'{individual_transfer_rank[transfer_gene]:5d}',
                  f'{mean_expression_rank[transfer_gene]:5d}',
