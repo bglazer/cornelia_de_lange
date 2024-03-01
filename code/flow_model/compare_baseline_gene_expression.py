@@ -74,7 +74,7 @@ mut_model = GroupL1FlowModel(input_dim=num_nodes,
 mut_model.load_state_dict(mut_state_dict)
 
 #%%
-device='cuda:0'
+device='cpu'
 wt_model = wt_model.to(device).eval()
 wt_X = wt_X.to(device)
 mut_model = mut_model.to(device).eval()
@@ -133,7 +133,21 @@ trajectories = plotting.compare_cell_type_trajectories([wt_idxs_np, mut_idxs_np]
                                                         data=[wt_data, mut_data],
                                                         cell_type_to_idx=cell_type_to_idx, 
                                                         labels=['Wildtype', 'Mutant'])
+#%%
+diff = trajectories[0] - trajectories[1]
+max_diff = max(np.abs(diff).max(), np.abs(diff).min())
 
+plt.imshow(diff, 
+           vmin=-max_diff, vmax=max_diff,
+           aspect='auto', cmap='bwr',
+           interpolation='none')
+# Label the y-axis with the cell types
+plt.yticks(np.arange(len(cell_type_list)), cell_type_list)
+plt.xticks(np.arange(0, n_steps, n_steps//10), 
+           np.arange(0, len_trajectory, len_trajectory//10))
+plt.colorbar()
+plt.title('Difference in cell type proportions across time')
+#%%
 num_cells_in_trajectories = np.array([len(wt_initial) * n_repeats * n_steps,
                                         len(mut_initial) * n_repeats * n_steps])
 

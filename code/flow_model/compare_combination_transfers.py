@@ -8,7 +8,6 @@ import util
 from tabulate import tabulate
 import scanpy as sc
 import networkx as nx
-from itertools import combinations
 import plotting
 import random
 import matplotlib
@@ -16,10 +15,10 @@ import glob
 from collections import Counter
 #%%
 # Load the data
-source_genotype = 'wildtype'
-target_genotype = 'mutant'
-label = 'VIM_first_'
-# label = ''
+source_genotype = 'mutant'
+target_genotype = 'wildtype'
+# label = 'VIM_first_'
+label = ''
 
 src_tmstp = '20230607_165324' if source_genotype == 'wildtype' else '20230608_093734'
 tgt_tmstp = '20230607_165324' if target_genotype == 'wildtype' else '20230608_093734'
@@ -53,29 +52,29 @@ tgt_baseline_idxs = pickle.load(open(f'{tgt_outdir}/baseline_nearest_cell_idxs_{
 tgt_baseline_cell_proportions, tgt_baseline_cell_errors = plotting.calculate_cell_type_proportion(tgt_baseline_idxs, tgt_data, cell_types, n_repeats, error=True)
 
 #%%
-individual_proportions = {}
-individual_distances = {}
-individual_errors = {}
-# Load all the individual transfer simulation results (cell type proportions)
-# Plus one for the empty (null) transfer
-for i in range(0, len(all_genes)):
-    result = pickle.load(open(f'{datadir}/individual_combination_{i}_mutant_to_wildtype_transfer_cell_type_proportions.pickle', 'rb'))
-    gene = tuple(result['transfer_genes'])[0]
-    proportions = result['perturb_proportions']
-    error = result['perturb_errors']
-    individual_proportions[gene] = proportions
-    individual_errors[gene] = error
-    individual_distances = {gene: np.abs(proportions - src_baseline_cell_proportions) 
-                            for gene, proportions in individual_proportions.items()}
-sorted_distances = sorted(individual_distances.items(), key=lambda x: x[1].sum())
-individual_transfer_rank = {gene: i for i, (gene, distances) in enumerate(sorted_distances)}
+# individual_proportions = {}
+# individual_distances = {}
+# individual_errors = {}
+# # Load all the individual transfer simulation results (cell type proportions)
+# # Plus one for the empty (null) transfer
+# for i in range(0, len(all_genes)):
+#     result = pickle.load(open(f'{datadir}/individual_combination_{i}_mutant_to_wildtype_transfer_cell_type_proportions.pickle', 'rb'))
+#     gene = tuple(result['transfer_genes'])[0]
+#     proportions = result['perturb_proportions']
+#     error = result['perturb_errors']
+#     individual_proportions[gene] = proportions
+#     individual_errors[gene] = error
+#     individual_distances = {gene: np.abs(proportions - src_baseline_cell_proportions) 
+#                             for gene, proportions in individual_proportions.items()}
+# sorted_distances = sorted(individual_distances.items(), key=lambda x: x[1].sum())
+# individual_transfer_rank = {gene: i for i, (gene, distances) in enumerate(sorted_distances)}
 
 #%%
 # Load the baseline transfer (null, no transfer) simulation results
-baseline_result = pickle.load(open(f'{datadir}/baseline_combination_0_mutant_to_wildtype_transfer_cell_type_proportions.pickle', 'rb'))
-baseline_proportions = baseline_result['perturb_proportions']
-baseline_error = baseline_result['perturb_errors']
-baseline_distance = np.abs(baseline_proportions - src_baseline_cell_proportions).sum()
+# baseline_result = pickle.load(open(f'{datadir}/baseline_combination_0_mutant_to_wildtype_transfer_cell_type_proportions.pickle', 'rb'))
+# baseline_proportions = baseline_result['perturb_proportions']
+# baseline_error = baseline_result['perturb_errors']
+# baseline_distance = np.abs(baseline_proportions - src_baseline_cell_proportions).sum()
 #%%
 # Calculate a ranking of the genes by their mean expression
 mean_expression = np.array(tgt_data.X.mean(axis=0)).flatten()
@@ -89,20 +88,20 @@ tgt_graph = pickle.load(open(f'{tgt_outdir}/optimal_{target_genotype}_graph.pick
 src_graph = pickle.load(open(f'{src_outdir}/optimal_{source_genotype}_graph.pickle', 'rb'))
 
 #%%
-headers = ['Gene', 'Cell Proportion Dist', 'WT Num Targets Rank', 'WT Mean Rank',  'WT Var Rank', 'Jaccard Index of Targets']
-rows = []
-diffs = []
-for i, (transfer_gene, distances) in enumerate(sorted_distances):
-    transfer_gene = transfer_gene
-    # Get the outgoing edges from the transfer gene from the networkx graph
-    out = set(src_graph.out_edges(transfer_gene))
-    diffs.append(distances)
+# headers = ['Gene', 'Cell Proportion Dist', 'WT Num Targets Rank', 'WT Mean Rank',  'WT Var Rank', 'Jaccard Index of Targets']
+# rows = []
+# diffs = []
+# for i, (transfer_gene, distances) in enumerate(sorted_distances):
+#     transfer_gene = transfer_gene
+#     # Get the outgoing edges from the transfer gene from the networkx graph
+#     out = set(src_graph.out_edges(transfer_gene))
+#     diffs.append(distances)
 
-    transfer_names = protein_id_name[transfer_gene]
+#     transfer_names = protein_id_name[transfer_gene]
 
-    rows.append((f'{transfer_names}',
-                 f'{distances.sum():.3f}',
-    ))
+#     rows.append((f'{transfer_names}',
+#                  f'{distances.sum():.3f}',
+#     ))
                 #  f'{var_expression_rank[transfer_idx]:5d}'))
 #%%
 best_gene_combinations = []
@@ -140,29 +139,38 @@ for gene, p in gene_probability.items():
     print(f'{count:2d}/{len(best_gene_combinations):2d} {p:.4f} {protein_id_name[gene]}')
 
 all_core_genes = list(combo_gene_counts.keys())
+significant_genes = [gene for gene in gene_probability if gene_probability[gene] < .01]
+#%%
+pickle.dump(significant_genes, open(f'{datadir}/{label}{transfer}_significant_genes.pickle', 'wb'))
 
 #%%
 n_repeats = 1_000
 p_components = []
+biggest_component_sizes = []
+
 for combo in best_gene_combinations:
     # Compute the probability of finding N randomly selected nodes in a strongly connected component
-    combo_components = nx.strongly_connected_components(src_graph.subgraph(combo))
+    combo_components = nx.strongly_connected_components(tgt_graph.subgraph(combo))
     combo_max_component = max(combo_components, key=lambda x: len(x))
-    big_component_sizes = np.zeros(n_repeats)
+    biggest_component_sizes.append(len(combo_max_component))
+    random_component_sizes = np.zeros(n_repeats)
 
     for i in range(n_repeats):
         nodes = np.random.choice(list(src_graph.nodes), len(combo), replace=False)
         components = nx.strongly_connected_components(src_graph.subgraph(nodes))
-        big_component_sizes[i] = max([len(c) for c in components])
+        random_component_sizes[i] = max([len(c) for c in components])
 
-    p_larger_component = (big_component_sizes > len(combo_max_component)).sum() / n_repeats
+    p_larger_component = (random_component_sizes > len(combo_max_component)).sum() / n_repeats
     p_components.append(p_larger_component)
     print(f'Probability of finding a larger component by chance: {p_larger_component}', flush=True)
     print(f'Nodes in largest component / Nodes selected: {len(combo_max_component)}/{len(combo)}, {len(combo_max_component)/len(combo)}', flush=True)
     print('-')
+
 #%%
 p_components = np.array(p_components)
 print(f'p-values less than .05: {(p_components < .05).sum()} out of {len(p_components)}')
+p_component_dict = [(len(combo), len_cc, p) for combo, p, len_cc in zip(best_gene_combinations, p_components, biggest_component_sizes)]
+pickle.dump(p_component_dict, open(f'{datadir}/{label}{transfer}_p_components.pickle', 'wb'))
 #%%
 all_combo_genes = set()
 for combo in best_gene_combinations:
@@ -225,8 +233,8 @@ def draw_graph(graph, title):
 
     # Color nodes by their connectivity
     colormap = matplotlib.cm.viridis
-    pagerank = nx.pagerank(graph)
-    centrality = np.array([pagerank[node] for node in graph.nodes])
+    centrality = nx.betweenness_centrality(graph)
+    centrality = np.array([centrality[node] for node in graph.nodes])
     centrality_scaled = (centrality - centrality.min()) / (centrality.max() - centrality.min())
     node_colors = [colormap(centrality_scaled[i]) for i in range(len(graph.nodes))]
     node_scale = np.array([core_gene_counts[gene]/len(core_gene_counts)
@@ -491,4 +499,15 @@ plt.xticks([])
 plt.title('Individual transfer difference from mutant, best combination')
 plt.ylabel('Cell Proportions, percentage point difference')
 
+# %%
+#%%
+smallest_combo = min(best_gene_combinations, key=len)
+sequential_labeled_points(smallest_combo, 
+                          (individual_distances, individual_errors), 
+                          (baseline_distance, baseline_error))
+
+plt.xlabel('Transfer Gene')
+plt.xticks([])
+plt.title('Individual transfer difference from mutant, smallest combination')
+plt.ylabel('Cell Proportions, percentage point difference')
 # %%

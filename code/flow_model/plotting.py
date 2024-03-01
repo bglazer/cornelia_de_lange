@@ -40,7 +40,17 @@ def time_distribution(trajectories, pca, label, baseline=None):
     axs.set_xlabel('PC1', fontsize=16)
     axs.set_ylabel('PC2', fontsize=16)
     axs.set_title(f'{label.capitalize()}', fontsize=20)
-    
+
+def colorize_trajectory(nearest_idxs, data, cell_type_to_idx):
+    cell_colors = util.distinct_colors(len(cell_type_to_idx))
+
+    cell_type_traj = idx_to_cell_type(nearest_idxs, data, 
+                                      cell_type_to_idx)
+    cell_color_traj = np.array(cell_colors)[cell_type_traj]
+    return cell_color_traj
+
+def cell_colors(cell_type_to_idx):
+    return util.distinct_colors(len(cell_type_to_idx))
 
 def cell_type_distribution(trajectories, nearest_idxs, data, cell_type_to_idx, pca, label, baseline=None, s=1, scatter_alpha=0.1):
     # Plot a scatter plot showing the overall distribution of points in the trajectories
@@ -329,12 +339,12 @@ def compare_cell_type_trajectories(nearest_idxs, data, cell_type_to_idx, labels)
             cell_type_counts = np.bincount(cell_type_idxs, minlength=num_cell_types)
             cell_type_trajectories[i, :, j] = cell_type_counts
     # Normalize the counts to get the proportion of each cell type in the trajectory
-    cell_type_trajectories = cell_type_trajectories / cell_type_trajectories.sum(axis=(1,2))[:,None,None]
+    cell_type_trajectories = cell_type_trajectories / cell_type_trajectories.sum(axis=(1,2))[:,None,None] * len_trajectory
     combined_trajectories = np.zeros((num_cell_types*num_comparisons, len_trajectory), dtype=float)
     # Stack the trajectories on top of each other for the plot
     for i in range(num_comparisons):
         combined_trajectories[i::num_comparisons] = cell_type_trajectories[i]
-    plt.imshow(combined_trajectories, aspect='auto', cmap='Blues', interpolation='none')
+    plt.imshow(combined_trajectories, aspect='auto', cmap='viridis', interpolation='none')
     # Label the y-axis with the cell type names
     # Add another set of ticks on the right side of the plot\
     spacing = 1/num_comparisons
@@ -344,6 +354,9 @@ def compare_cell_type_trajectories(nearest_idxs, data, cell_type_to_idx, labels)
         plt.axhline(i, color='black', linewidth=spacing)
     for i in np.arange(0,num_cell_types*num_comparisons,1)-spacing:
         plt.axhline(i, color='black', linewidth=spacing/3)
+    plt.ylabel('Cell Type')
+    plt.xlabel('Time')
+
     plt.twinx()
     plt.ylim(0, num_cell_types*num_comparisons)
     plt.yticks(ticks=np.arange(0,num_cell_types*num_comparisons,1)+spacing, 
@@ -351,6 +364,8 @@ def compare_cell_type_trajectories(nearest_idxs, data, cell_type_to_idx, labels)
                fontsize=8);
     plt.title(f'{labels[0].capitalize()} vs {labels[1].capitalize()} cell type'
               ' proportion in trajectories')
+    
+    plt.colorbar(label='Proportion of cells', orientation='vertical', pad=0.15, aspect=30)
     return cell_type_trajectories
 
 def cell_type_proportions(proportions, proportion_errors, cell_types, labels, colors=None):

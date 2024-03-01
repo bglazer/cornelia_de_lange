@@ -607,100 +607,129 @@ plt.title(f'Difference in Lag-1 Autocorrelation '
 # Clear the cache
 torch.cuda.empty_cache()
 #%%
-# Calculate the spatial gradient of the velocity model
-from torch.autograd import grad
-# Get the velocity at each timepoint
-src_baseline_trajectories_tensor.requires_grad = True
-tgt_baseline_trajectories_tensor.requires_grad = True
-src_unrolled_trajectories = src_baseline_trajectories_tensor.reshape(-1, n_genes)
-tgt_unrolled_trajectories = tgt_baseline_trajectories_tensor.reshape(-1, n_genes)
-src_grad = torch.zeros_like(src_unrolled_trajectories, device='cpu')
-tgt_grad = torch.zeros_like(src_unrolled_trajectories, device='cpu')
-batch_size = 5000
-batch_idxs = torch.linspace(start=0, end=len(src_unrolled_trajectories), 
-                            steps=len(src_unrolled_trajectories)//batch_size+1, 
-                            dtype=torch.int)
-#%%
-for i in tqdm(range(len(batch_idxs)-1)):
-    start = batch_idxs[i]
-    end = batch_idxs[i+1]
-    src_points = src_unrolled_trajectories[start:end]
+# Calculate the spatial divergence of the velocity model
+# def divergence_num(model, x, h=1e-5):
+#     with torch.no_grad():
+#         d = torch.zeros_like(x[:,0])
+#         for i in range(x.shape[1]):
+#             m_i = model.models[i]
+#             dx = torch.zeros_like(x)
+#             dx[:,i] = h
+#             velo_xp = m_i(x + dx)[:,0]
+#             velo_xm = m_i(x - dx)[:,0]
+#             d += ((velo_xp - velo_xm)/(2*h))
+#         return d
 
-    src_velo, src_var = src_model(src_points)
-    tgt_velo, tgt_var = tgt_model(src_points)
-    src_velo = torch.clamp(src_velo, min=0.0).cpu()
-    tgt_velo = torch.clamp(tgt_velo, min=0.0).cpu()
+def divergence_torch(model, x):
+    div = torch.zeros_like(x[:,0])
+    for i in range(x.shape[1]):
+        m_i = model.models[i]
+        v_i = m_i(x)[:,0]
+        d = torch.autograd.grad(v_i, x, 
+                                torch.ones_like(v_i), 
+                                retain_graph=False, 
+                                create_graph=False)[0][:,i].detach()
+        div += d
+    return div
+#%%
+all_X = torch.cat((src_X, tgt_X), dim=0).to(device)
+all_X_np = util.tonp(all_X)
+all_X_proj = pca.transform(all_X_np)
+
+#%%
+# Calculate the divergence of the velocity at each timepoint
+src_div = torch.zeros_like(src_baseline_trajectories_tensor[:,:,0], device='cpu')
+tgt_div = torch.zeros_like(src_baseline_trajectories_tensor[:,:,0], device='cpu')
+
+for i in tqdm(range(len_tspan)):
+    points = src_baseline_trajectories_tensor[i]
+    points.requires_grad_(True)
+
     # Compute the gradient of the velocity with respect to the trajectory
-    src_grad_batch = grad(outputs=src_velo, 
-                          inputs=src_points, 
-                          grad_outputs=torch.ones_like(src_velo))[0]
-    tgt_grad_batch = grad(outputs=tgt_velo, 
-                          inputs=src_points, 
-                          grad_outputs=torch.ones_like(src_velo))[0]
-    src_grad[start:end] = src_grad_batch.detach().cpu()
-    tgt_grad[start:end] = tgt_grad_batch.detach().cpu()
+    src_div_batch = divergence_torch(src_model, points)
+    tgt_div_batch = divergence_torch(tgt_model, points)
+    src_div[i] = src_div_batch.detach().cpu()
+    tgt_div[i] = tgt_div_batch.detach().cpu()
+    points.requires_grad_(False)
+    del src_div_batch
+    del tgt_div_batch
+    del points
 
 #%%
-src_grad = src_grad.detach()
-tgt_grad = tgt_grad.detach()
+src_div = src_div.detach()
+tgt_div = tgt_div.detach()
+torch.cuda.empty_cache()
 
-src_grad_nrm = src_grad.norm(dim=1)
-tgt_grad_nrm = tgt_grad.norm(dim=1)
 # %%
-plt.plot(src_grad_nrm[::1000], label=source_genotype)
-plt.plot(tgt_grad_nrm[::1000], label=target_genotype)
+src_div_sample = src_div.reshape(len_tspan, -1)[:,::10].mean(axis=1)
+tgt_div_sample = tgt_div.reshape(len_tspan, -1)[:,::10].mean(axis=1)
+plt.plot(src_div_sample, label=source_genotype)
+plt.plot(tgt_div_sample, label=target_genotype)
 plt.legend()
 
-# %%
-# Make a grid in PCA space of the gradient of the velocity
-src_grad_grid = torch.zeros((ngrid,ngrid))
-tgt_grad_grid = torch.zeros((ngrid,ngrid))
+#%%
+# Make a grid in PCA space of the divergence of the velocity
+ngrid = 100
 
-src_grad_grid[:] = np.nan
-tgt_grad_grid[:] = np.nan
+xmin = src_trajectory_proj[:,0].min()
+xmax = src_trajectory_proj[:,0].max()
+ymin = src_trajectory_proj[:,1].min()
+ymax = src_trajectory_proj[:,1].max()
 
-x_indices = np.digitize(src_trajectory_proj[:,0], xgrid)
-y_indices = np.digitize(src_trajectory_proj[:,1], ygrid)
+xgrid_X = np.linspace(xmin, xmax, ngrid)
+ygrid_X = np.linspace(ymin, ymax, ngrid)
 
-for i in range(ngrid-1):
-    for j in range(ngrid-1):
-        inside = (x_indices == i+1) & (y_indices == j+1)
-        if inside.sum() >= 10:
-            src_grad_grid[i,j] = src_grad[inside].mean()
-            tgt_grad_grid[i,j] = tgt_grad[inside].mean()
+# Flatten the divergence arrays
+src_div_flat = src_div.flatten()
+tgt_div_flat = tgt_div.flatten()
+
+# Use np.histogram2d to bin the data
+src_histogram, xedges, yedges = np.histogram2d(src_trajectory_proj[:,0], src_trajectory_proj[:,1], bins=[xgrid_X, ygrid_X], weights=src_div_flat)
+tgt_histogram, _, _ = np.histogram2d(src_trajectory_proj[:,0], src_trajectory_proj[:,1], bins=[xgrid_X, ygrid_X], weights=tgt_div_flat)
+
+# Calculate the mean of the bins
+src_div_grid = src_histogram / np.histogram2d(src_trajectory_proj[:,0], src_trajectory_proj[:,1], bins=[xgrid_X, ygrid_X])[0]
+tgt_div_grid = tgt_histogram / np.histogram2d(src_trajectory_proj[:,0], src_trajectory_proj[:,1], bins=[xgrid_X, ygrid_X])[0]
 
 #%%
-# Calculate the 99th percentile of the gradient
-src_grad_grid_values = src_grad_grid[~torch.isnan(src_grad_grid)]
-tgt_grad_grid_values = tgt_grad_grid[~torch.isnan(tgt_grad_grid)]
-maxgrad = max(torch.quantile(src_grad_grid_values, 0.99), torch.quantile(tgt_grad_grid_values, 0.99))
-mingrad = min(torch.quantile(src_grad_grid_values, 0.01), torch.quantile(tgt_grad_grid_values, 0.01))
+# Calculate the 99th percentile of the divergence
+src_div_grid_values = src_div_grid[~np.isnan(src_div_grid)]
+tgt_div_grid_values = tgt_div_grid[~np.isnan(tgt_div_grid)]
+maxdiv = max(np.quantile(src_div_grid_values, 0.99), np.quantile(tgt_div_grid_values, 0.99))
+mindiv = min(np.quantile(src_div_grid_values, 0.01), np.quantile(tgt_div_grid_values, 0.01))
+
+xi = np.linspace(xmin, xmax, ngrid)
+yi = np.linspace(ymin, ymax, ngrid)
+xi, yi = np.meshgrid(xi, yi)
+zi = k(np.vstack([xi.flatten(), yi.flatten()]))
 #%%
-plt.imshow(src_grad_grid.T, cmap='viridis', origin='lower', 
-           extent=(xmin, xmax, ymin, ymax), vmin=mingrad, vmax=maxgrad)
+plt.imshow(src_div_grid.T, cmap='viridis', origin='lower', 
+           extent=(xmin, xmax, ymin, ymax), vmin=mindiv, vmax=maxdiv)
 plt.colorbar()
 plt.contour(xi, yi, zi.reshape(xi.shape), levels=5, cmap='Greys')
-plt.title(f'{source_genotype.capitalize()} Velocity Gradient')
+plt.title(f'{source_genotype.capitalize()} Velocity Divergence')
+# plt.scatter(all_X_proj[:,0], all_X_proj[:,1], c='grey', s=1, alpha=.8)
 
 # %%
-plt.imshow(tgt_grad_grid.T, cmap='viridis', origin='lower',
-              extent=(xmin, xmax, ymin, ymax), vmin=mingrad, vmax=maxgrad)
+plt.imshow(tgt_div_grid.T, cmap='viridis', origin='lower',
+              extent=(xmin, xmax, ymin, ymax), vmin=mindiv, vmax=maxdiv)
 plt.colorbar()
 plt.contour(xi, yi, zi.reshape(xi.shape), levels=5, cmap='Greys')
-plt.title(f'{target_genotype.capitalize()} Velocity Gradient')
+plt.title(f'{target_genotype.capitalize()} Velocity Divergence')
+# plt.scatter(all_X_proj[:,0], all_X_proj[:,1], c='grey', s=1, alpha=.8)
 
 # %%
-diff_grid = src_grad_grid - tgt_grad_grid
-# Center the diff grid on zero
-valid = lambda x: x[~torch.isnan(x)]
-maxdiff = max(torch.abs(valid(diff_grid).max()), 
-              torch.abs(valid(diff_grid).min()))
+diff_grid = src_div_grid - tgt_div_grid
+# Center the diff grid on zero, excluding the 99th percentile
+valid = lambda x: x[~np.isnan(x)]
+all_diffs = diff_grid[~np.isnan(diff_grid)]
+maxdiff = max(np.abs(np.quantile(all_diffs, 0.99)), np.abs(np.quantile(all_diffs, 0.01)))
 plt.imshow(diff_grid.T, cmap='coolwarm', origin='lower',
            extent=(xmin, xmax, ymin, ymax), vmin=-maxdiff, vmax=maxdiff)
 plt.colorbar()
-plt.contour(xi, yi, zi.reshape(xi.shape), levels=5, cmap='Greys', alpha=.5)
+# plt.contour(xi, yi, zi.reshape(xi.shape), levels=5, cmap='Greys', alpha=.5)
 plt.title(f'{source_genotype.capitalize()} - {target_genotype.capitalize()} '
-          'Velocity Gradient Difference')
+          'Velocity Divergence Difference')
 # %%
 # Plot the distributions of the number of zeros in the cells of the trajectory
 src_zeros = tonp(src_baseline_trajectories_tensor == 0).mean(axis=(1,2), dtype=float)
@@ -716,9 +745,15 @@ ax2 = plt.twinx()
 ax2.plot(src_zeros - tgt_zeros, label='Difference', c='grey', alpha=.5)
 ax2.axvline(decline_idx*10, c='green', alpha=.3)
 
+ax1.set_ylabel('Fraction of Zeros')
+ax1.set_xlabel('Time')
+ax1.set_title('Fraction of Zeros in Trajectories')
+ax2.set_ylabel('\nDifference in Fraction of Zeros')
 # Add a legend with all the lines
 artists = ax1.lines + ax2.lines
 plt.legend(artists, [l.get_label() for l in artists])
+
+plt.tight_layout()
 
 # %%
 # Subset to only the rescue genes
@@ -836,6 +871,9 @@ plt.title('Average Difference in Autocorrelation of Random Gene Sets')
 
 # %%
 # Get only the highest mean genes
+n_genes = src_X.shape[1]
+src_unrolled_trajectories = src_baseline_trajectories_tensor.reshape((-1, n_genes))
+tgt_unrolled_trajectories = tgt_baseline_trajectories_tensor.reshape((-1, n_genes))
 src_top_genes = src_unrolled_trajectories.mean(dim=0).argsort(descending=True)[:10]
 tgt_top_genes = tgt_unrolled_trajectories.mean(dim=0).argsort(descending=True)[:10]
 
@@ -869,8 +907,8 @@ axs[0,0].imshow(top_n_autocorr, cmap='viridis', aspect='auto', interpolation='no
 axs[0,0].axvline(decline_idx*10, c='white', alpha=.8)
 axs[0,0].set_yticks(np.arange(len(top_ns)), top_ns)
 axs[0,0].set_xlabel('Time')
-axs[0,0].set_title('Autocorrelation of Top N Genes by Variance')
-axs[0,0].set_ylabel('Top N')
+axs[0,0].set_title('Autocorrelation of Top N Genes by Mean Expression')
+axs[0,0].set_ylabel('Number of Genes')
 for i in range(2):
     axs[i,0].set_xticks(np.linspace(0, len_tspan, num=10),
                        [f'{int(t)}' for t in np.linspace(0, len_trajectory, num=10)])
@@ -878,13 +916,13 @@ for i in range(2):
 plt.colorbar(axs[0,0].images[0], cax=axs[0,1])
 axs[1,0].set_xlabel('Time')
 axs[1,0].set_ylabel('Autocorrelation')
-axs[1,0].set_title('Autocorrelation of Top N Genes by Variance')
+axs[1,0].set_title('Autocorrelation of Top N Genes by Mean Expression')
 # Make a colorbar for the plasma colormap used in the second plot
 axs[1,0].axvline(decline_idx*10, c='green', alpha=.3)
 axs[1,1].imshow(np.linspace(0,1,256).reshape(-1,1), cmap='plasma', aspect='auto')
 axs[1,1].set_yticks(np.linspace(0,256,15),
                     [f'{int(t)}' for t in np.linspace(0,150,15)]);
-axs[1,1].set_ylabel('Top N')
+axs[1,1].set_ylabel('Number of Genes')
 axs[1,1].set_xticks([])
 axs[2,0].plot(top_n_pct_zeros.mean(axis=1), marker='o')
 axs[2,0].set_title('Proportion of Zeros in Top N Genes')
@@ -931,17 +969,17 @@ axs[0,1].axvline(decline_idx*10, c='white', alpha=1)
 axs[0,1].set_title(f'{target_genotype.capitalize()} Absolute Autocorrelation')
 
 
-axs[1,0].imshow((src_autocorr.T / src_autocorr.max(axis=0)[:,None]), cmap='viridis', aspect='auto',
+axs[1,0].imshow((src_autocorr.T / src_autocorr.max(axis=0)[:,None]), cmap='plasma', aspect='auto',
            interpolation='none', vmin=0, vmax=1)
 
 axs[1,0].axvline(decline_idx*10, c='white', alpha=1)
-axs[1,0].set_title(f'{source_genotype.capitalize()} Relative Autocorrelation')
-axs[1,1].imshow((tgt_autocorr.T / tgt_autocorr.max(axis=0)[:,None]), cmap='viridis', aspect='auto',
+axs[1,0].set_title(f'{source_genotype.capitalize()} Normalized Autocorrelation')
+axs[1,1].imshow((tgt_autocorr.T / tgt_autocorr.max(axis=0)[:,None]), cmap='plasma', aspect='auto',
            interpolation='none', vmin=0, vmax=1)
 axs[1,1].set_yticks([])
 axs[1,1].axvline(decline_idx*10, c='white', alpha=1)
 
-axs[1,1].set_title(f'{target_genotype.capitalize()} Relative Autocorrelation')
+axs[1,1].set_title(f'{target_genotype.capitalize()} Normalized Autocorrelation')
 
 for ax in axs[:,0]:
     ax.set_yticks(np.arange(10), 
@@ -964,6 +1002,11 @@ for ax in axs[:, 2]:
 norm = matplotlib.colors.Normalize(vmin=float(min_autocorr), vmax=float(max_autocorr))
 scm = ScalarMappable(norm=norm, cmap=viridis)
 fig.colorbar(scm, cax=axs[0,2], label='Absolute Autocorrelation')
+
+norm = matplotlib.colors.Normalize(vmin=0, vmax=1)
+scm = ScalarMappable(norm=norm, cmap=plasma)
+fig.colorbar(scm, cax=axs[1,2], label='Relative Autocorrelation')
+
 plt.tight_layout()
 #%%
 fig, axs = plt.subplots(1,1, figsize=(7,5))
@@ -1038,7 +1081,7 @@ expression_diff = tonp(src_baseline_trajectories_tensor[:,:,src_top_genes].T.mea
 max_diff = max(abs(expression_diff.max()), abs(expression_diff.min()))
 axs.imshow(expression_diff, cmap='coolwarm', aspect='auto', interpolation='none',
               vmin=-max_diff, vmax=max_diff)
-axs.set_title(f'Difference in Expression of Top {n_genes} Genes'
+axs.set_title(f'Difference in Simulated Expression of Top {n_genes} Genes'
                 f' ({source_genotype.capitalize()} - {target_genotype.capitalize()})')
 axs.axvline(decline_idx*10, c='green', alpha=.3)
 axs.set_xticks(np.linspace(0, len_tspan, num=10),
@@ -1108,7 +1151,8 @@ for i in range(n_clusters):
 cluster_distance_sort = np.argsort(cluster_distances)
 # Plot the clusters as a heatmap
 # %%
-fig, axs = plt.subplots(1,2, figsize=(10,5))
+fig, axs = plt.subplots(1,2, figsize=(20,10))
+
 
 top_n = 3
 for i in range(top_n, n_clusters):
@@ -1142,7 +1186,7 @@ tab10 = plt.get_cmap('tab10')
 for i in range(top_n):
     end = start + top_cluster_sizes[i]
     line = axs[0].add_line(Line2D([len_tspan*1.02, len_tspan*1.02], 
-                                  [start-.3, end-.7], linewidth=5,
+                                  [start-.1, end-.9], linewidth=5,
                             c='black', alpha=1))
     line.set_clip_on(False)
     axs[0].text(len_tspan*1.07, (start+end-1)*.5, f'C{cluster_distance_sort[i]}',
@@ -1159,7 +1203,7 @@ for ax in axs:
                     rotation=45);
 axs[0].set_title('Normalized Autocorrelation of Genes')
 axs[1].set_title('Mean Normalized Autocorrelation of Cluster')
-fig.suptitle('Gene clusters with minimum autocorrelation near the critical point', fontsize=16)
+fig.suptitle('Gene clusters with minimum autocorrelation near the critical point', fontsize=28)
 plt.tight_layout()
 
 #%%
