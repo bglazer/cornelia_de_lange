@@ -45,14 +45,13 @@ wt.obsm['cluster_sums'] = wt_cluster_sums
 mut.obsm['cluster_sums'] = mut_cluster_sums
 # %%
 # Save the data sets
-wt.write_h5ad('../data/wildtype_net.h5ad')
-mut.write_h5ad('../data/mutant_net.h5ad')
+# wt.write_h5ad('../data/wildtype_net.h5ad')
+# mut.write_h5ad('../data/mutant_net.h5ad')
 
 
 #%%
 protein_id_to_name = pickle.load(open('../data/protein_id_to_name.pickle', 'rb'))
 
-# %%
 #%%
 # Get the GO enrichment associated with each cluster
 cluster_enrichment = pickle.load(open('../data/cluster_enrichments_louvain.pickle', 'rb'))
@@ -140,7 +139,7 @@ for i in range(n_clusters):
                       verticalalignment='top',
                       fontsize=12, wrap=True)
         # Save the plot
-        _=plt.savefig(f'../figures/gene_cluster_heatmaps/cluster_{i}_expression.png', dpi=300)
+        # _=plt.savefig(f'../figures/gene_cluster_heatmaps/cluster_{i}_expression.png', dpi=300)
         # Clear the plot
         _=plt.clf();
 

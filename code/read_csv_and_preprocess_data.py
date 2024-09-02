@@ -147,12 +147,12 @@ from util import filter_to_network
 wt_net = filter_to_network(wt_adata)
 mut_net = filter_to_network(mut_adata)
 
-#%%
-# Save the network filtered AnnData objects as h5ad files
-wt_net.write('../data/wildtype_net.h5ad')
-mut_net.write('../data/mutant_net.h5ad')
-# %%
-# Save the unfiltered AnnData objects as h5ad files
-wt_adata.write('../data/wildtype_full.h5ad')
-mut_adata.write('../data/mutant_full.h5ad')
+# #%%
+# # Save the network filtered AnnData objects as h5ad files
+# wt_net.write('../data/wildtype_net.h5ad')
+# mut_net.write('../data/mutant_net.h5ad')
+# # %%
+# # Save the unfiltered AnnData objects as h5ad files
+# wt_adata.write('../data/wildtype_full.h5ad')
+# mut_adata.write('../data/mutant_full.h5ad')
 # %%

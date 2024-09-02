@@ -15,8 +15,8 @@ import glob
 from collections import Counter
 #%%
 # Load the data
-source_genotype = 'wildtype'
-target_genotype = 'mutant'
+source_genotype = 'mutant'
+target_genotype = 'wildtype'
 
 src_tmstp = '20230607_165324' if source_genotype == 'wildtype' else '20230608_093734'
 tgt_tmstp = '20230607_165324' if target_genotype == 'wildtype' else '20230608_093734'
@@ -124,8 +124,10 @@ for i in range(n_repeats):
     for gene, count in random_combo_gene_counts.items():
         random_occurences[gene][i] = count
 
+p_gene_counts = {}
 for gene, count in combo_gene_counts.most_common():
     p = (random_occurences[gene] > count).sum()/n_repeats
+    p_gene_counts[gene] = p
     print(f'{count:2d}/{len(best_gene_combinations):2d} {p:.4f} {protein_id_name[gene]}')
 
 
@@ -162,7 +164,13 @@ for combo in best_gene_combinations:
     combo_components.append(largest_component_genes)
     largest_component = src_graph.subgraph(largest_component_genes)
     assert(len(largest_component_genes) == len(largest_component))
-    combined_components.add_edges_from(largest_component.edges)
+    for edge in largest_component.edges:
+        if edge not in combined_components.edges:
+            combined_components.add_edge(*edge, count=1)
+        else:
+            combined_components[edge[0]][edge[1]]['count'] += 1
+
+    # combined_components.add_edges_from(largest_component.edges)
     combined_components.add_nodes_from(largest_component.nodes)
 
 assert(nx.is_strongly_connected(combined_components))
@@ -192,20 +200,27 @@ layout = nx.kamada_kawai_layout(combined_components)
 node_labels = {node:protein_id_name[node] for node in combined_components.nodes}
 # Color nodes by their connectivity
 colormap = matplotlib.cm.viridis
-pagerank = nx.pagerank(combined_components)
-centrality = np.array([pagerank[node] for node in combined_components.nodes])
-centrality_scaled = (centrality - centrality.min()) / (centrality.max() - centrality.min())
+# pagerank = nx.pagerank(combined_components)=
+centrality = np.array([combo_gene_counts[node] for node in combined_components.nodes])
+centrality_scaled = (centrality / centrality.max())
 node_colors = [colormap(centrality_scaled[i]) for i in range(len(combined_components.nodes))]
+# node_colors = ['yellow' if centrality[i] else 'blue' for i in range(len(combined_components.nodes))]
 node_scale = np.array([core_gene_counts[gene]/len(core_gene_counts)
                        for gene in combined_components.nodes])
 node_sizes = (node_scale * 1500)
+edge_alphas = np.array([combined_components[u][v]['count'] for u,v in combined_components.edges])
+edge_alphas = (edge_alphas) / (edge_alphas.max())
+edge_colors = []
+for alpha in edge_alphas:
+    edge_colors.append([.4,.4,.4,alpha]) #colormap(alpha)[:3] + (alpha,))
 # Increase the dpi of the figure so the text is not blurry
 fig = plt.figure(dpi=300)
 no_self_loops = combined_components.copy()
 no_self_loops.remove_edges_from(nx.selfloop_edges(no_self_loops))
 nx.draw(no_self_loops, pos=layout,
-        node_size=centrality_scaled*500+100,
-        edge_color='grey',
+        node_size=centrality+100,
+        # edge_color=[(0,0,0,alpha) for alpha in edge_alphas],
+        edge_color=edge_colors,
         # Change the node border color to blue
         node_color=node_colors,
         # alpha=node_scale+0.5,
@@ -225,14 +240,23 @@ node_size_ax = node_size_in*2 * plt_height / fig_height_in
 
 for i in range(len(combined_components.nodes)):
     gene = list(combined_components.nodes)[i]
-    plt.text(layout[gene][0], layout[gene][1]-node_size_ax[i], protein_id_name[gene], 
+    # Check if the gene was selected a statistically significant number of times
+    if gene in p_gene_counts and p_gene_counts[gene] < .001:
+        gene_name = protein_id_name[gene]+'*'
+    else:
+        gene_name = protein_id_name[gene]
+    plt.text(layout[gene][0], layout[gene][1]-node_size_ax[i], gene_name, 
              horizontalalignment='center', verticalalignment='top',
              fontsize=8, color='black',
              bbox=dict(facecolor='white', edgecolor='grey', boxstyle='round,pad=0.1'))
-plt.title('Core Subgraph of Optimal Mutant Transfer Genes')
-plt.colorbar(matplotlib.cm.ScalarMappable(norm=matplotlib.colors.Normalize(vmin=centrality.min(), vmax=centrality.max()), 
+plt.title('Subgraph of Mutant Transfer Genes')
+plt.colorbar(matplotlib.cm.ScalarMappable(norm=matplotlib.colors.Normalize(vmin=centrality_scaled.min()*.95, 
+                                                                           vmax=centrality_scaled.max()), 
                                           cmap=colormap),
-                                          shrink=.5, label='PageRank Centrality')
+             shrink=.5, 
+             ticks=[tick.round(2) for tick in np.linspace(centrality_scaled.min(), centrality_scaled.max(), 6)],
+             label='Proportion of transfer sets')
+
 #%%
 # Which clusters in the regulatory graph are the transfer genes in?
 # graph = pickle.load(open(f'../../data/filtered_graph.pickle', 'rb'))

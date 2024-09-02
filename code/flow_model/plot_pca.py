@@ -13,7 +13,7 @@ mut = sc.read_h5ad(f'../../data/mutant_net.h5ad')
 adata = wt.concatenate(mut, batch_key='genotype', batch_categories=['wildtype', 'mutant'])
 # %%
 # Arrow grid
-cell_types = {c:i for i,c in enumerate(set(wt.obs['cell_type']))}
+cell_types = {c:i for i,c in enumerate(sorted(set(wt.obs['cell_type'])))}
 proj = np.array(adata.obsm['X_pca'])
 pca = PCA()
 # Set the PC mean and components
@@ -71,18 +71,45 @@ for i in range(len(grid)):
 cosine_sim = (cosine_sim + 1) / 2
 
 #%%
-fig, axs = plt.subplots(1,2, figsize=(10,5))
+fig, axs = plt.subplots(2,1, figsize=(10,20))
+
+from util import distinct_colors
+cell_colors = distinct_colors(len(cell_types))
 
 for i, genotype in enumerate(['wildtype', 'mutant']):
     ax = axs[i]
     d = adata[adata.obs['genotype']==genotype,:]
     proj = np.array(pca.transform(d.X.toarray()))[:,0:2]
+    cell_type_colors = [cell_colors[cell_types[c]] for c in d.obs['cell_type']]
+    
+    # Scatter plot of cell projection, colored by pseudotime
+    axs[i].scatter(proj[:,0], proj[:,1],s=12, alpha=0.6, c=cell_type_colors)
+    
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlabel('PC1', fontsize=12)
+    ax.set_ylabel('PC2', fontsize=12)
+    ax.set_title(f'{genotype.capitalize()}', fontsize=24)
+# plt.suptitle(f'Cell Types on PCA projection', fontsize=18)
+plt.tight_layout()
+
+#%%
+fig, axs = plt.subplots(1,2, figsize=(20,10))
+
+for i, genotype in enumerate(['wildtype']):#, 'mutant']):
+    ax = axs[i]
+    d = adata[adata.obs['genotype']==genotype,:]
+    proj = np.array(pca.transform(d.X.toarray()))[:,0:2]
     cell_labels = [cell_types[c] for c in d.obs['cell_type']]
+    pseudotime = d.obs['pseudotime']
+    # Scatter plot of cell projection, colored by pseudotime
+    axs[0].scatter(proj[:,0], proj[:,1],s=8, alpha=0.2, c=pseudotime, cmap='plasma')
+
     # Make the scatter plot have the same range for both genotypes
     # ax.scatter(proj[:,0], proj[:,1], s=1, alpha=0.2, c=cell_labels, cmap='tab20')
     ax.set_xlim(minX-xbuf, maxX+xbuf)
     ax.set_ylim(minY-ybuf, maxY+ybuf)
-    ax.set_facecolor('grey')
+    ax.set_facecolor('white')
     # add a grid to the plot
     for x in x_grid_points:
         ax.axvline(x, color='black', alpha=0.1)
@@ -98,7 +125,8 @@ for i, genotype in enumerate(['wildtype', 'mutant']):
 
         ax.arrow(x + x_spacing/2, y + y_spacing/2, v[0], v[1], 
                  width=0.025, head_width=0.1, head_length=0.05, 
-                 color=plt.cm.viridis(cosine_sim[i]))
+                 color='black')
+                #  color=plt.cm.viridis(cosine_sim[i]))
 
     ax.set_xticks([])
     ax.set_yticks([])
